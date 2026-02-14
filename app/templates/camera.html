@@ -1,0 +1,47 @@
+{% extends 'layout.html' %}
+{% block content %}
+<h1>{{ camera.camera_name }}</h1>
+<div class="camera-detail">
+  <div class="preview">
+    <img src="{{ url_for('dashboard.camera_stream', camera_id=camera.camera_id) }}" alt="stream" />
+  </div>
+  <div class="panel">
+    <h3>配置</h3>
+    <form id="config-form" data-id="{{ camera.camera_id }}">
+      <label>房间名称
+        <input type="text" name="name" value="{{ camera.camera_name }}" />
+      </label>
+      <label>观察年限
+        <input type="number" step="0.1" name="time_span_years" value="{{ camera.sampling.time_span_years }}" />
+      </label>
+      <label>冷却时间（小时）
+        <input type="number" step="0.1" name="cooldown_hours" value="{{ camera.sampling.cooldown_hours }}" />
+      </label>
+      <label>最近采样张数
+        <input type="number" step="1" min="0" name="recent_samples_limit" value="{{ camera.recent_samples_limit }}" />
+      </label>
+      <div class="actions">
+        <button class="btn" type="submit">保存配置</button>
+        <button class="btn secondary" data-action="snapshot" type="button">强制抓拍</button>
+      </div>
+    </form>
+    <div class="muted" id="save-status"></div>
+    <div class="muted" id="snapshot-status"></div>
+  </div>
+</div>
+
+<section class="recent">
+  <h3>最近采样</h3>
+  {% if recent_samples %}
+  <div class="recent-grid">
+    {% for item in recent_samples %}
+    <a class="recent-item" href="{{ item }}" target="_blank" rel="noopener">
+      <img src="{{ item }}" alt="sample" loading="lazy" />
+    </a>
+    {% endfor %}
+  </div>
+  {% else %}
+  <div class="muted">暂无采样</div>
+  {% endif %}
+</section>
+{% endblock %}

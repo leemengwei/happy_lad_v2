@@ -1,0 +1,5 @@
+*.jpg
+images/
+*.whl
+.venv/
+

@@ -1,0 +1,26 @@
+{% extends 'layout.html' %}
+{% block content %}
+<h1>多摄像头管理</h1>
+<div class="grid">
+  {% for camera in cameras %}
+  <section class="card">
+    <header>
+      <h2>{{ camera.camera_name }}</h2>
+      <div class="muted">{{ camera.device }}</div>
+    </header>
+    <div class="preview">
+      <img src="{{ url_for('dashboard.camera_stream', camera_id=camera.camera_id) }}" alt="{{ camera.camera_name }}" />
+    </div>
+    <div class="meta">
+      <div>最近帧: {{ camera.last_frame_time or '暂无' }}</div>
+      <div>状态: {{ '运行中' if camera.running else '停止' }}</div>
+      <div class="muted" data-role="snapshot-status"></div>
+    </div>
+    <div class="actions">
+      <button class="btn" data-action="snapshot" data-id="{{ camera.camera_id }}">强制抓拍</button>
+      <a class="btn secondary" href="{{ url_for('dashboard.camera_detail', camera_id=camera.camera_id) }}">详情</a>
+    </div>
+  </section>
+  {% endfor %}
+</div>
+{% endblock %}

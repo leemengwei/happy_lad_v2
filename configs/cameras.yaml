@@ -1,0 +1,23 @@
+cameras:
+- device: /dev/video0
+  fps: 30
+  height: 1080
+  id: cam0
+  model_config: /home/feifeichouchou/happy_lad_v2/configs/dstest1_pgie_config.txt
+  name: Lounge
+  sampling:
+    cooldown_hours: 24.0
+    time_span_years: 10.0
+  storage_dir: /home/feifeichouchou/happy_lad_v2/images/cam0
+  width: 1920
+- device: /dev/video2
+  fps: 30
+  height: 1080
+  id: cam1
+  model_config: /home/feifeichouchou/happy_lad_v2/configs/dstest1_pgie_config.txt
+  name: Kitchen
+  sampling:
+    cooldown_hours: 24
+    time_span_years: 10
+  storage_dir: /home/feifeichouchou/happy_lad_v2/images/cam1
+  width: 1920

@@ -1,0 +1,6 @@
+flask
+pyyaml
+numpy
+pillow
+opencv-python-headless
+pyds-1.1.8-py3-none-linux_aarch64.whl

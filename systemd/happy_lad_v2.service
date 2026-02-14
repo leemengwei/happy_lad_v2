@@ -1,0 +1,15 @@
+[Unit]
+Description=Happy Lad v2 Service
+After=network.target
+
+[Service]
+User=feifeichouchou
+Group=feifeichouchou
+ExecStart=/home/feifeichouchou/happy_lad_v2/scripts/run.sh
+Restart=always
+RestartSec=5
+StandardOutput=null
+StandardError=null
+
+[Install]
+WantedBy=multi-user.target
