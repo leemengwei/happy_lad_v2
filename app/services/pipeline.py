@@ -60,6 +60,7 @@ class DeepStreamPipeline:
         self._status_lock = threading.Lock()
         self._last_frame_time: Optional[datetime.datetime] = None
         self._running = False
+        self._snooze_until: Optional[datetime.datetime] = None
 
     def _build_pipeline(self) -> Gst.Pipeline:
         pipeline = Gst.Pipeline()
@@ -181,10 +182,15 @@ class DeepStreamPipeline:
                 cv2.LINE_AA,
             )
 
-            should_sample = self.sampling_policy.should_sample(
-                self.sampling_state,
-                person_count=person_count,
-            )
+            snoozing = self.is_snoozing()
+            if snoozing:
+                self.sampling_state.force_snapshot = False
+                should_sample = False
+            else:
+                should_sample = self.sampling_policy.should_sample(
+                    self.sampling_state,
+                    person_count=person_count,
+                )
 
             if should_sample:
                 self.storage.save_sample(frame_copy, self.camera_name)
@@ -205,7 +211,8 @@ class DeepStreamPipeline:
             text_params = display_meta.text_params[0]
             text_params.display_text = (
                 f"{self.camera_name} | Person={person_count} | "
-                f"Cooldown={self.sampling_policy.cooldown_seconds}s"
+                f"Cooldown={self.sampling_policy.cooldown_seconds}s | "
+                f"Snooze={'ON' if snoozing else 'OFF'}"
             )
             text_params.x_offset = 10
             text_params.y_offset = 12
@@ -263,6 +270,26 @@ class DeepStreamPipeline:
         logger.info("Force snapshot requested for %s", self.camera_id)
         self.sampling_state.force_snapshot = True
 
+    def add_snooze(self, minutes: int = 10) -> datetime.datetime:
+        now = datetime.datetime.now()
+        with self._status_lock:
+            base_time = self._snooze_until if self._snooze_until and self._snooze_until > now else now
+            self._snooze_until = base_time + datetime.timedelta(minutes=max(0, minutes))
+            return self._snooze_until
+
+    def cancel_snooze(self) -> None:
+        with self._status_lock:
+            self._snooze_until = None
+
+    def is_snoozing(self) -> bool:
+        with self._status_lock:
+            if self._snooze_until is None:
+                return False
+            if self._snooze_until <= datetime.datetime.now():
+                self._snooze_until = None
+                return False
+            return True
+
     def get_latest_jpeg(self) -> Optional[bytes]:
         with self._jpeg_lock:
             return self._latest_jpeg
@@ -270,6 +297,10 @@ class DeepStreamPipeline:
     def get_status(self) -> dict:
         with self._status_lock:
             last_frame = self._last_frame_time
+            snooze_until = self._snooze_until
+        now = datetime.datetime.now()
+        snoozing = bool(snooze_until and snooze_until > now)
+        remaining_seconds = int((snooze_until - now).total_seconds()) if snoozing else 0
         return {
             "camera_id": self.camera_id,
             "camera_name": self.camera_name,
@@ -281,4 +312,7 @@ class DeepStreamPipeline:
                 "time_span_years": self.sampling_policy.time_span_years,
                 "cooldown_hours": self.sampling_policy.cooldown_seconds / 3600,
             },
+            "snoozing": snoozing,
+            "snooze_until": snooze_until.isoformat() if snoozing else None,
+            "snooze_remaining_seconds": remaining_seconds,
         }

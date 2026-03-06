@@ -28,6 +28,28 @@ def force_snapshot(camera_id: str):
     return jsonify({"status": "ok"})
 
 
+@api_bp.post("/cameras/<camera_id>/snooze")
+def add_camera_snooze(camera_id: str):
+    manager = _get_manager()
+    pipeline = manager.get_pipeline(camera_id)
+    snooze_until = pipeline.add_snooze(minutes=10)
+    return jsonify(
+        {
+            "status": "ok",
+            "snoozing": True,
+            "snooze_until": snooze_until.isoformat(),
+        }
+    )
+
+
+@api_bp.post("/cameras/<camera_id>/snooze/cancel")
+def cancel_camera_snooze(camera_id: str):
+    manager = _get_manager()
+    pipeline = manager.get_pipeline(camera_id)
+    pipeline.cancel_snooze()
+    return jsonify({"status": "ok", "snoozing": False, "snooze_until": None})
+
+
 @api_bp.post("/cameras/<camera_id>/config")
 def update_camera_config(camera_id: str):
     payload = request.get_json(force=True)

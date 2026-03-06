@@ -1,6 +1,6 @@
 {% extends 'layout.html' %}
 {% block content %}
-<h1>多摄像头管理</h1>
+<h1>快乐家园</h1>
 <div class="grid">
   {% for camera in cameras %}
   <section class="card">
@@ -14,10 +14,15 @@
     <div class="meta">
       <div>最近帧: {{ camera.last_frame_time or '暂无' }}</div>
       <div>状态: {{ '运行中' if camera.running else '停止' }}</div>
+      <div data-role="snooze-status">
+        瞌睡: {{ '剩余 ' ~ (camera.snooze_remaining_seconds // 60) ~ ' 分钟' if camera.snoozing else '关闭' }}
+      </div>
       <div class="muted" data-role="snapshot-status"></div>
     </div>
     <div class="actions">
       <button class="btn" data-action="snapshot" data-id="{{ camera.camera_id }}">强制抓拍</button>
+      <button class="btn secondary" data-action="snooze" data-id="{{ camera.camera_id }}">瞌睡 +10 分钟</button>
+      <button class="btn secondary" data-action="cancel-snooze" data-id="{{ camera.camera_id }}">取消瞌睡</button>
       <a class="btn secondary" href="{{ url_for('dashboard.camera_detail', camera_id=camera.camera_id) }}">详情</a>
     </div>
   </section>
