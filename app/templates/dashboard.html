@@ -9,7 +9,13 @@
       <div class="muted">{{ camera.device }}</div>
     </header>
     <div class="preview">
-      <img src="{{ url_for('dashboard.camera_stream', camera_id=camera.camera_id) }}" alt="{{ camera.camera_name }}" />
+      <img
+        src="{{ url_for('static', filename='img/sleepy-pig.svg') if camera.snoozing else url_for('dashboard.camera_stream', camera_id=camera.camera_id) }}"
+        alt="{{ '小猪睡觉中' if camera.snoozing else camera.camera_name }}"
+        data-role="preview-image"
+        data-stream-src="{{ url_for('dashboard.camera_stream', camera_id=camera.camera_id) }}"
+        data-snooze-src="{{ url_for('static', filename='img/sleepy-pig.svg') }}"
+      />
     </div>
     <div class="meta">
       <div>最近帧: {{ camera.last_frame_time or '暂无' }}</div>

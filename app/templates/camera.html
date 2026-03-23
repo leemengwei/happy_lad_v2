@@ -3,7 +3,13 @@
 <h1>{{ camera.camera_name }}</h1>
 <div class="camera-detail">
   <div class="preview">
-    <img src="{{ url_for('dashboard.camera_stream', camera_id=camera.camera_id) }}" alt="stream" />
+    <img
+      src="{{ url_for('static', filename='img/sleepy-pig.svg') if camera.snoozing else url_for('dashboard.camera_stream', camera_id=camera.camera_id) }}"
+      alt="{{ '小猪睡觉中' if camera.snoozing else 'stream' }}"
+      data-role="preview-image"
+      data-stream-src="{{ url_for('dashboard.camera_stream', camera_id=camera.camera_id) }}"
+      data-snooze-src="{{ url_for('static', filename='img/sleepy-pig.svg') }}"
+    />
   </div>
   <div class="panel">
     <h3>配置</h3>

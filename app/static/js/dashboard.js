@@ -1,3 +1,21 @@
+function setPreviewBySnoozeState(container, snoozing) {
+  if (!container) return;
+  const preview = container.querySelector("[data-role='preview-image']");
+  if (!preview) return;
+
+  const streamSrc = preview.dataset.streamSrc;
+  const snoozeSrc = preview.dataset.snoozeSrc;
+  if (!streamSrc || !snoozeSrc) return;
+
+  if (snoozing) {
+    preview.src = snoozeSrc;
+    preview.alt = "小猪睡觉中";
+  } else {
+    preview.src = streamSrc;
+    preview.alt = "实时画面";
+  }
+}
+
 document.addEventListener("click", async (event) => {
   const target = event.target;
   const cameraId = target.dataset.id || document.getElementById("config-form")?.dataset.id;
@@ -42,6 +60,9 @@ document.addEventListener("click", async (event) => {
         snoozeStatus.textContent = "瞌睡: 关闭";
       }
     }
+
+    setPreviewBySnoozeState(card, Boolean(data.snoozing));
+
     if (status) {
       status.textContent = isCancel ? "已取消瞌睡" : "已增加 10 分钟瞌睡";
       setTimeout(() => {
