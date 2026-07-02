@@ -9,6 +9,7 @@ import numpy as np
 import cv2
 
 import pyds
+gi.require_version("Gst", "1.0")
 from gi.repository import Gst, GLib
 
 from app.services.sampling import SamplingPolicy, SamplingState
@@ -254,17 +255,35 @@ class DeepStreamPipeline:
         if self.loop is not None:
             self.loop.quit()
         self.pipeline.set_state(Gst.State.NULL)
+        self.loop = None
+        self.thread = None
 
     def _bus_call(self, bus, message):
         t = message.type
         if t == Gst.MessageType.EOS:
             logger.warning("Pipeline EOS: %s", self.camera_id)
+            self._running = False
             if self.loop is not None:
                 self.loop.quit()
         elif t == Gst.MessageType.ERROR:
-            logger.error("Pipeline error: %s", self.camera_id)
+            err, debug = message.parse_error()
+            logger.error("Pipeline error: %s (%s) debug=%s", self.camera_id, err, debug)
+            self._running = False
             if self.loop is not None:
                 self.loop.quit()
+
+    def restart(self) -> None:
+        logger.warning("Restarting pipeline for %s", self.camera_id)
+        if self._running:
+            self.stop()
+        self.start()
+
+    def is_stalled(self, timeout_seconds: int = 20) -> bool:
+        with self._status_lock:
+            last_frame = self._last_frame_time
+        if last_frame is None:
+            return False
+        return (datetime.datetime.now() - last_frame).total_seconds() > timeout_seconds
 
     def force_snapshot(self) -> None:
         logger.info("Force snapshot requested for %s", self.camera_id)
@@ -301,12 +320,14 @@ class DeepStreamPipeline:
         now = datetime.datetime.now()
         snoozing = bool(snooze_until and snooze_until > now)
         remaining_seconds = int((snooze_until - now).total_seconds()) if snoozing else 0
+        last_frame_age_seconds = int((now - last_frame).total_seconds()) if last_frame else None
         return {
             "camera_id": self.camera_id,
             "camera_name": self.camera_name,
             "device": self.device,
             "running": self._running,
             "last_frame_time": last_frame.isoformat() if last_frame else None,
+            "last_frame_age_seconds": last_frame_age_seconds,
             "recent_samples_limit": self.recent_samples_limit,
             "sampling": {
                 "time_span_years": self.sampling_policy.time_span_years,

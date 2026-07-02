@@ -1,15 +1,22 @@
-from typing import Dict
+import logging
+import threading
+import time
+from typing import Dict, Optional
 
 from app.config import AppConfig
 from app.services.pipeline import DeepStreamPipeline
 from app.services.sampling import SamplingPolicy
 from app.services.storage import Storage
 
+logger = logging.getLogger(__name__)
+
 
 class PipelineManager:
     def __init__(self, config: AppConfig) -> None:
         self.config = config
         self.pipelines: Dict[str, DeepStreamPipeline] = {}
+        self._watchdog_thread: Optional[threading.Thread] = None
+        self._watchdog_stop = threading.Event()
 
         for camera in config.cameras:
             sampling_policy = SamplingPolicy(
@@ -34,8 +41,10 @@ class PipelineManager:
     def start_all(self) -> None:
         for pipeline in self.pipelines.values():
             pipeline.start()
+        self._start_watchdog()
 
     def stop_all(self) -> None:
+        self._watchdog_stop.set()
         for pipeline in self.pipelines.values():
             pipeline.stop()
 
@@ -44,3 +53,25 @@ class PipelineManager:
 
     def list_status(self) -> list:
         return [pipeline.get_status() for pipeline in self.pipelines.values()]
+
+    def _start_watchdog(self) -> None:
+        if self._watchdog_thread and self._watchdog_thread.is_alive():
+            return
+
+        self._watchdog_stop.clear()
+        self._watchdog_thread = threading.Thread(
+            target=self._watchdog_loop,
+            name="pipeline-watchdog",
+            daemon=True,
+        )
+        self._watchdog_thread.start()
+
+    def _watchdog_loop(self) -> None:
+        while not self._watchdog_stop.wait(10):
+            for pipeline in self.pipelines.values():
+                if pipeline.is_stalled(timeout_seconds=30):
+                    logger.warning(
+                        "Watchdog detected stalled stream for %s, restarting.",
+                        pipeline.camera_id,
+                    )
+                    pipeline.restart()

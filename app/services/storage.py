@@ -2,6 +2,7 @@ import os
 import datetime
 import logging
 import cv2
+from typing import List
 
 logger = logging.getLogger(__name__)
 
@@ -43,3 +44,29 @@ class Storage:
 
         candidates.sort(key=lambda item: item[0], reverse=True)
         return [rel for _mtime, rel in candidates[:limit]]
+
+    def delete_samples(self, rel_paths: List[str]) -> List[str]:
+        deleted: List[str] = []
+        base_abs = os.path.abspath(self.base_dir)
+        for rel_path in rel_paths:
+            if not isinstance(rel_path, str) or not rel_path.strip():
+                continue
+            if rel_path == "latest.jpg":
+                continue
+
+            norm_rel = os.path.normpath(rel_path).lstrip("/\\")
+            full_path = os.path.abspath(os.path.join(self.base_dir, norm_rel))
+            if not full_path.startswith(base_abs + os.sep):
+                continue
+            if not full_path.lower().endswith(".jpg"):
+                continue
+
+            try:
+                os.remove(full_path)
+                deleted.append(norm_rel)
+                logger.info("Deleted snapshot: %s", full_path)
+            except FileNotFoundError:
+                continue
+            except OSError:
+                logger.exception("Failed deleting snapshot: %s", full_path)
+        return deleted

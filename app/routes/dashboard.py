@@ -18,6 +18,25 @@ def dashboard():
     return render_template("dashboard.html", cameras=status_list)
 
 
+@dashboard_bp.route("/diagnostics")
+def diagnostics():
+    manager = _get_manager()
+    status_list = manager.list_status()
+    stale_threshold_seconds = 20
+    stale_cameras = [
+        item
+        for item in status_list
+        if item.get("last_frame_age_seconds") is not None
+        and item["last_frame_age_seconds"] > stale_threshold_seconds
+    ]
+    return render_template(
+        "diagnostics.html",
+        cameras=status_list,
+        stale_threshold_seconds=stale_threshold_seconds,
+        stale_cameras=stale_cameras,
+    )
+
+
 @dashboard_bp.route("/camera/<camera_id>")
 def camera_detail(camera_id: str):
     manager = _get_manager()
@@ -26,14 +45,17 @@ def camera_detail(camera_id: str):
     pipeline = manager.get_pipeline(camera_id)
     limit = max(0, int(getattr(pipeline, "recent_samples_limit", 16)))
     recent = pipeline.storage.list_recent(limit)
-    recent_urls = [
-        url_for("dashboard.sample_media", camera_id=camera_id, filename=path)
+    recent_items = [
+        {
+            "filename": path,
+            "url": url_for("dashboard.sample_media", camera_id=camera_id, filename=path),
+        }
         for path in recent
     ]
     return render_template(
         "camera.html",
         camera=pipeline.get_status(),
-        recent_samples=recent_urls,
+        recent_samples=recent_items,
     )
 
 

@@ -2,4 +2,4 @@
 images/
 *.whl
 .venv/
-
+*.pyc

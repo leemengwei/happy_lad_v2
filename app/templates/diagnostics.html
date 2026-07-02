@@ -1,0 +1,37 @@
+{% extends 'layout.html' %}
+{% block content %}
+<h1>服务诊断</h1>
+<div class="panel">
+  <div>相机总数: {{ cameras|length }}</div>
+  <div>卡帧阈值: {{ stale_threshold_seconds }} 秒</div>
+  <div>卡帧数量: {{ stale_cameras|length }}</div>
+</div>
+
+<section class="recent">
+  <h3>相机状态明细</h3>
+  <table class="diag-table">
+    <thead>
+      <tr>
+        <th>Camera ID</th>
+        <th>名称</th>
+        <th>状态</th>
+        <th>最近帧</th>
+        <th>帧龄(秒)</th>
+        <th>设备</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for item in cameras %}
+      <tr>
+        <td>{{ item.camera_id }}</td>
+        <td>{{ item.camera_name }}</td>
+        <td>{{ '运行中' if item.running else '停止' }}</td>
+        <td>{{ item.last_frame_time or '暂无' }}</td>
+        <td>{{ item.last_frame_age_seconds if item.last_frame_age_seconds is not none else 'N/A' }}</td>
+        <td>{{ item.device }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endblock %}

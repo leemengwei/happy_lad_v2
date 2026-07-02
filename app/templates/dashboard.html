@@ -3,7 +3,7 @@
 <h1>快乐家园</h1>
 <div class="grid">
   {% for camera in cameras %}
-  <section class="card">
+  <section class="card" data-camera-id="{{ camera.camera_id }}">
     <header>
       <h2>{{ camera.camera_name }}</h2>
       <div class="muted">{{ camera.device }}</div>
@@ -18,8 +18,8 @@
       />
     </div>
     <div class="meta">
-      <div>最近帧: {{ camera.last_frame_time or '暂无' }}</div>
-      <div>状态: {{ '运行中' if camera.running else '停止' }}</div>
+      <div data-role="last-frame">最近帧: {{ camera.last_frame_time or '暂无' }}</div>
+      <div data-role="running-status">状态: {{ '运行中' if camera.running else '停止' }}</div>
       <div data-role="snooze-status">
         瞌睡: {{ '剩余 ' ~ (camera.snooze_remaining_seconds // 60) ~ ' 分钟' if camera.snoozing else '关闭' }}
       </div>

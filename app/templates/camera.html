@@ -39,15 +39,43 @@
 <section class="recent">
   <h3>最近采样</h3>
   {% if recent_samples %}
+  <div class="actions recent-actions">
+    <input
+      type="text"
+      class="sample-filter"
+      data-role="sample-filter"
+      placeholder="按文件名筛选，例如 2026-07-03"
+    />
+    <button class="btn secondary" data-action="select-all-samples" type="button">全选</button>
+    <button class="btn secondary" data-action="invert-samples" type="button">反选</button>
+    <button class="btn secondary" data-action="clear-samples" type="button">清空选择</button>
+    <button class="btn" data-action="delete-samples" type="button">删除选中</button>
+  </div>
+  <div class="muted" id="recent-status"></div>
   <div class="recent-grid">
     {% for item in recent_samples %}
-    <a class="recent-item" href="{{ item }}" target="_blank" rel="noopener">
-      <img src="{{ item }}" alt="sample" loading="lazy" />
-    </a>
+    <label class="recent-item" data-role="sample-item" data-file="{{ item.filename }}" data-file-lower="{{ item.filename|lower }}">
+      <input type="checkbox" class="sample-check" data-role="sample-check" />
+      <a href="{{ item.url }}" data-role="sample-link" data-index="{{ loop.index0 }}">
+        <img src="{{ item.url }}" alt="sample" loading="lazy" data-role="sample-image" />
+      </a>
+    </label>
     {% endfor %}
   </div>
-  {% else %}
-  <div class="muted">暂无采样</div>
   {% endif %}
+  <div class="muted" data-role="recent-empty" {% if recent_samples %}style="display:none;"{% endif %}>暂无采样</div>
 </section>
+
+<div class="lightbox" data-role="lightbox" aria-hidden="true">
+  <div class="lightbox-backdrop" data-action="lightbox-close"></div>
+  <div class="lightbox-dialog" role="dialog" aria-label="采样预览">
+    <button class="lightbox-close" type="button" data-action="lightbox-close" aria-label="关闭">×</button>
+    <button class="lightbox-delete" type="button" data-action="lightbox-delete" aria-label="快速删除">删除当前</button>
+    <button class="lightbox-nav prev" type="button" data-action="lightbox-prev" aria-label="上一张">‹</button>
+    <img class="lightbox-image" data-role="lightbox-image" alt="preview" />
+    <button class="lightbox-nav next" type="button" data-action="lightbox-next" aria-label="下一张">›</button>
+    <div class="lightbox-meta" data-role="lightbox-meta"></div>
+    <div class="lightbox-strip" data-role="lightbox-strip"></div>
+  </div>
+</div>
 {% endblock %}
