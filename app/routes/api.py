@@ -90,6 +90,8 @@ def update_camera_config(camera_id: str):
             target["sampling"]["cooldown_hours"] = float(sampling_payload["cooldown_hours"])
     if "recent_samples_limit" in payload:
         target["recent_samples_limit"] = int(payload["recent_samples_limit"])
+    if "sample_sound_file" in payload:
+        target["sample_sound_file"] = str(payload["sample_sound_file"]).strip()
 
     with open(config_path, "w", encoding="utf-8") as file:
         yaml.safe_dump(data, file, allow_unicode=True)
@@ -107,8 +109,19 @@ def update_camera_config(camera_id: str):
         pipeline.camera_name = payload["name"]
     if "recent_samples_limit" in payload:
         pipeline.recent_samples_limit = max(0, int(payload["recent_samples_limit"]))
+    if "sample_sound_file" in payload:
+        pipeline.sample_sound_file = str(payload["sample_sound_file"]).strip()
 
     return jsonify({"status": "updated"})
+
+
+@api_bp.post("/cameras/<camera_id>/sample-sound/test")
+def test_camera_sample_sound(camera_id: str):
+    pipeline, error = _get_pipeline_or_error(camera_id)
+    if error:
+        return error
+    ok = pipeline.test_sample_sound()
+    return jsonify({"status": "ok" if ok else "failed", "played": bool(ok)}), (200 if ok else 500)
 
 
 @api_bp.post("/cameras/<camera_id>/samples/delete")

@@ -26,12 +26,17 @@
       <label>最近采样张数
         <input type="number" step="1" min="0" name="recent_samples_limit" value="{{ camera.recent_samples_limit }}" />
       </label>
+      <label>采样提示音文件
+        <input type="text" name="sample_sound_file" value="{{ camera.sample_sound_file }}" placeholder="/abs/path/to/sound.wav" />
+      </label>
       <div class="actions">
         <button class="btn" type="submit">保存配置</button>
+        <button class="btn secondary" data-action="test-sample-sound" type="button">测试提示音</button>
         <button class="btn secondary" data-action="snapshot" type="button">强制抓拍</button>
       </div>
     </form>
     <div class="muted" id="save-status"></div>
+    <div class="muted" id="sample-sound-status"></div>
     <div class="muted" id="snapshot-status"></div>
   </div>
 </div>

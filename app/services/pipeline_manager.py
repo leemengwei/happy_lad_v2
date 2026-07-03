@@ -34,6 +34,7 @@ class PipelineManager:
                 model_config=camera.model_config,
                 sampling_policy=sampling_policy,
                 storage=storage,
+                sample_sound_file=camera.sample_sound_file,
                 recent_samples_limit=camera.recent_samples_limit,
             )
             self.pipelines[camera.id] = pipeline

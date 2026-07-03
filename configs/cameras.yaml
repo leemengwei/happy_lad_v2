@@ -6,6 +6,7 @@ cameras:
   model_config: /home/feifeichouchou/happy_lad_v2/configs/dstest1_pgie_config.txt
   name: Lounge
   recent_samples_limit: 90
+  sample_sound_file: /home/feifeichouchou/happy_lad_v2/xiaomaozi.wav
   sampling:
     cooldown_hours: 24.0
     time_span_years: 5.0
@@ -18,6 +19,7 @@ cameras:
   model_config: /home/feifeichouchou/happy_lad_v2/configs/dstest1_pgie_config.txt
   name: Kitchen
   recent_samples_limit: 20
+  sample_sound_file: /home/feifeichouchou/happy_lad_v2/xiaomaozi.wav
   sampling:
     cooldown_hours: 24.0
     time_span_years: 5.0

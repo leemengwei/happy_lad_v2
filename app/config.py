@@ -19,6 +19,7 @@ class CameraConfig:
     fps: int
     model_config: str
     storage_dir: str
+    sample_sound_file: str
     recent_samples_limit: int
     sampling: SamplingConfig
 
@@ -45,6 +46,10 @@ def load_config(path: str) -> AppConfig:
                 fps=int(raw.get("fps", 30)),
                 model_config=raw["model_config"],
                 storage_dir=raw["storage_dir"],
+                sample_sound_file=raw.get(
+                    "sample_sound_file",
+                    "/usr/share/sounds/alsa/Front_Center.wav",
+                ),
                 recent_samples_limit=max(0, int(raw.get("recent_samples_limit", 16))),
                 sampling=SamplingConfig(
                     time_span_years=float(sampling.get("time_span_years", 10)),

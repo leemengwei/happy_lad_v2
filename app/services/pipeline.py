@@ -1,5 +1,7 @@
 import datetime
 import logging
+import os
+import subprocess
 import threading
 import time
 from typing import Optional
@@ -34,6 +36,7 @@ class DeepStreamPipeline:
         model_config: str,
         sampling_policy: SamplingPolicy,
         storage: Storage,
+        sample_sound_file: str,
         recent_samples_limit: int,
     ) -> None:
         self.camera_id = camera_id
@@ -45,6 +48,7 @@ class DeepStreamPipeline:
         self.model_config = model_config
         self.sampling_policy = sampling_policy
         self.storage = storage
+        self.sample_sound_file = sample_sound_file
         self.recent_samples_limit = recent_samples_limit
         self.sampling_state = SamplingState(
             last_sample_time=datetime.datetime.now().replace(
@@ -62,6 +66,7 @@ class DeepStreamPipeline:
         self._last_frame_time: Optional[datetime.datetime] = None
         self._running = False
         self._snooze_until: Optional[datetime.datetime] = None
+        self._sound_warned = False
 
     def _build_pipeline(self) -> Gst.Pipeline:
         pipeline = Gst.Pipeline()
@@ -195,6 +200,7 @@ class DeepStreamPipeline:
 
             if should_sample:
                 self.storage.save_sample(frame_copy, self.camera_name)
+                self._play_sample_sound()
 
             if self._last_frame_time is None:
                 logger.info("First frame received: %s", self.camera_id)
@@ -230,6 +236,48 @@ class DeepStreamPipeline:
                 break
 
         return Gst.PadProbeReturn.OK
+
+    def _play_sample_sound(self) -> None:
+        if not self.sample_sound_file:
+            return
+        if not os.path.isfile(self.sample_sound_file):
+            if not self._sound_warned:
+                logger.warning(
+                    "Sample sound file not found for %s: %s",
+                    self.camera_id,
+                    self.sample_sound_file,
+                )
+                self._sound_warned = True
+            return
+
+        threading.Thread(target=self._play_sample_sound_sync, daemon=True).start()
+
+    def test_sample_sound(self) -> bool:
+        return self._play_sample_sound_sync()
+
+    def _play_sample_sound_sync(self) -> bool:
+        try:
+            result = subprocess.run(
+                ["paplay", self.sample_sound_file],
+                check=False,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            return result.returncode == 0
+        except FileNotFoundError:
+            if not self._sound_warned:
+                logger.warning("paplay not found; sample sound disabled for %s", self.camera_id)
+                self._sound_warned = True
+            return False
+        except Exception as exc:
+            if not self._sound_warned:
+                logger.warning(
+                    "Failed to play sample sound for %s: %s",
+                    self.camera_id,
+                    exc,
+                )
+                self._sound_warned = True
+            return False
 
     def start(self) -> None:
         if self._running:
@@ -329,6 +377,7 @@ class DeepStreamPipeline:
             "last_frame_time": last_frame.isoformat() if last_frame else None,
             "last_frame_age_seconds": last_frame_age_seconds,
             "recent_samples_limit": self.recent_samples_limit,
+            "sample_sound_file": self.sample_sound_file,
             "sampling": {
                 "time_span_years": self.sampling_policy.time_span_years,
                 "cooldown_hours": self.sampling_policy.cooldown_seconds / 3600,

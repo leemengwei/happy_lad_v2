@@ -235,6 +235,18 @@ document.addEventListener("click", async (event) => {
     }
   }
 
+  if (target.matches("[data-action='test-sample-sound']")) {
+    const status = document.getElementById("sample-sound-status");
+    if (status) status.textContent = "正在播放...";
+    const response = await fetch(`/api/cameras/${cameraId}/sample-sound/test`, { method: "POST" });
+    if (status) {
+      status.textContent = response.ok ? "播放成功" : "播放失败，请检查音频路径/输出设备";
+      setTimeout(() => {
+        status.textContent = "";
+      }, 3000);
+    }
+  }
+
   if (target.matches("[data-action='snooze']") || target.matches("[data-action='cancel-snooze']")) {
     const isCancel = target.matches("[data-action='cancel-snooze']");
     const endpoint = isCancel ? "snooze/cancel" : "snooze";
@@ -390,6 +402,7 @@ if (form) {
         cooldown_hours: parseFloat(form.cooldown_hours.value),
       },
       recent_samples_limit: parseInt(form.recent_samples_limit.value, 10),
+      sample_sound_file: form.sample_sound_file.value.trim(),
     };
 
     const response = await fetch(`/api/cameras/${cameraId}/config`, {
