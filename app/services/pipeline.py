@@ -37,6 +37,7 @@ class DeepStreamPipeline:
         sampling_policy: SamplingPolicy,
         storage: Storage,
         sample_sound_file: str,
+        sample_sound_volume: float,
         recent_samples_limit: int,
     ) -> None:
         self.camera_id = camera_id
@@ -49,6 +50,7 @@ class DeepStreamPipeline:
         self.sampling_policy = sampling_policy
         self.storage = storage
         self.sample_sound_file = sample_sound_file
+        self.sample_sound_volume = min(1.0, max(0.0, float(sample_sound_volume)))
         self.recent_samples_limit = recent_samples_limit
         self.sampling_state = SamplingState(
             last_sample_time=datetime.datetime.now().replace(
@@ -59,11 +61,14 @@ class DeepStreamPipeline:
         self.pipeline = self._build_pipeline()
         self.loop: Optional[GLib.MainLoop] = None
         self.thread: Optional[threading.Thread] = None
+        self._bus = None
+        self._bus_handler_id: Optional[int] = None
 
         self._latest_jpeg: Optional[bytes] = None
         self._jpeg_lock = threading.Lock()
         self._status_lock = threading.Lock()
         self._last_frame_time: Optional[datetime.datetime] = None
+        self._last_start_time: Optional[datetime.datetime] = None
         self._running = False
         self._snooze_until: Optional[datetime.datetime] = None
         self._sound_warned = False
@@ -257,8 +262,10 @@ class DeepStreamPipeline:
 
     def _play_sample_sound_sync(self) -> bool:
         try:
+            # paplay volume: 0..65536 (100%).
+            pulse_volume = str(int(65536 * self.sample_sound_volume))
             result = subprocess.run(
-                ["paplay", self.sample_sound_file],
+                ["paplay", "--volume", pulse_volume, self.sample_sound_file],
                 check=False,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
@@ -283,12 +290,28 @@ class DeepStreamPipeline:
         if self._running:
             return
 
+        # Defensive cleanup in case a previous cycle left bus watch/handler behind.
+        if self._bus is not None:
+            if self._bus_handler_id is not None:
+                try:
+                    self._bus.disconnect(self._bus_handler_id)
+                except Exception:
+                    pass
+                self._bus_handler_id = None
+            try:
+                self._bus.remove_signal_watch()
+            except Exception:
+                pass
+            self._bus = None
+
         self._running = True
+        with self._status_lock:
+            self._last_start_time = datetime.datetime.now()
         logger.info("Starting pipeline for %s (%s)", self.camera_id, self.device)
         self.loop = GLib.MainLoop()
-        bus = self.pipeline.get_bus()
-        bus.add_signal_watch()
-        bus.connect("message", self._bus_call)
+        self._bus = self.pipeline.get_bus()
+        self._bus.add_signal_watch()
+        self._bus_handler_id = self._bus.connect("message", self._bus_call)
 
         self.pipeline.set_state(Gst.State.PLAYING)
         self.thread = threading.Thread(target=self.loop.run, daemon=True)
@@ -299,9 +322,17 @@ class DeepStreamPipeline:
             return
 
         self._running = False
+        with self._status_lock:
+            self._last_start_time = None
         logger.info("Stopping pipeline for %s", self.camera_id)
         if self.loop is not None:
             self.loop.quit()
+        if self._bus is not None:
+            if self._bus_handler_id is not None:
+                self._bus.disconnect(self._bus_handler_id)
+                self._bus_handler_id = None
+            self._bus.remove_signal_watch()
+            self._bus = None
         self.pipeline.set_state(Gst.State.NULL)
         self.loop = None
         self.thread = None
@@ -329,9 +360,17 @@ class DeepStreamPipeline:
     def is_stalled(self, timeout_seconds: int = 20) -> bool:
         with self._status_lock:
             last_frame = self._last_frame_time
-        if last_frame is None:
-            return False
-        return (datetime.datetime.now() - last_frame).total_seconds() > timeout_seconds
+            last_start = self._last_start_time
+            running = self._running
+
+        now = datetime.datetime.now()
+        if last_frame is not None:
+            return (now - last_frame).total_seconds() > timeout_seconds
+
+        # No frame has ever arrived after startup: treat as stalled after grace period.
+        if running and last_start is not None:
+            return (now - last_start).total_seconds() > timeout_seconds
+        return False
 
     def force_snapshot(self) -> None:
         logger.info("Force snapshot requested for %s", self.camera_id)
@@ -378,6 +417,7 @@ class DeepStreamPipeline:
             "last_frame_age_seconds": last_frame_age_seconds,
             "recent_samples_limit": self.recent_samples_limit,
             "sample_sound_file": self.sample_sound_file,
+            "sample_sound_volume": self.sample_sound_volume,
             "sampling": {
                 "time_span_years": self.sampling_policy.time_span_years,
                 "cooldown_hours": self.sampling_policy.cooldown_seconds / 3600,

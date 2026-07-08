@@ -169,7 +169,9 @@ function closeLightbox() {
     lightbox.classList.remove("open");
     lightbox.setAttribute("aria-hidden", "true");
   }
-  document.body.style.overflow = "";
+  if (!uploaderLightboxState.open) {
+    document.body.style.overflow = "";
+  }
 }
 
 function stepLightbox(offset) {
@@ -218,9 +220,8 @@ async function quickDeleteCurrentLightboxItem() {
 document.addEventListener("click", async (event) => {
   const target = event.target;
   const cameraId = target.dataset.id || document.getElementById("config-form")?.dataset.id;
-  if (!cameraId) return;
 
-  if (target.matches("[data-action='snapshot']")) {
+  if (cameraId && target.matches("[data-action='snapshot']")) {
     const response = await fetch(`/api/cameras/${cameraId}/snapshot`, { method: "POST" });
     let status = document.getElementById("snapshot-status");
     if (!status) {
@@ -247,7 +248,7 @@ document.addEventListener("click", async (event) => {
     }
   }
 
-  if (target.matches("[data-action='snooze']") || target.matches("[data-action='cancel-snooze']")) {
+  if (cameraId && (target.matches("[data-action='snooze']") || target.matches("[data-action='cancel-snooze']"))) {
     const isCancel = target.matches("[data-action='cancel-snooze']");
     const endpoint = isCancel ? "snooze/cancel" : "snooze";
     const response = await fetch(`/api/cameras/${cameraId}/${endpoint}`, { method: "POST" });
@@ -303,7 +304,7 @@ document.addEventListener("click", async (event) => {
     updateRecentSelectionState();
   }
 
-  if (target.matches("[data-action='delete-samples']")) {
+  if (cameraId && target.matches("[data-action='delete-samples']")) {
     const checked = Array.from(document.querySelectorAll("[data-role='sample-check']:checked"));
     const status = document.getElementById("recent-status");
     if (checked.length === 0) {
@@ -368,6 +369,28 @@ document.addEventListener("click", async (event) => {
   if (target.matches("[data-action='lightbox-delete']")) {
     quickDeleteCurrentLightboxItem();
   }
+
+  if (target.matches("[data-role='uploader-link']") || target.closest("[data-role='uploader-link']")) {
+    const link = target.matches("[data-role='uploader-link']") ? target : target.closest("[data-role='uploader-link']");
+    event.preventDefault();
+    openUploaderLightboxByFile(link.dataset.file || "");
+  }
+
+  if (target.matches("[data-action='uploader-lightbox-close']")) {
+    closeUploaderLightbox();
+  }
+
+  if (target.matches("[data-action='uploader-lightbox-prev']")) {
+    stepUploaderLightbox(-1);
+  }
+
+  if (target.matches("[data-action='uploader-lightbox-next']")) {
+    stepUploaderLightbox(1);
+  }
+
+  if (target.matches("[data-action='uploader-lightbox-delete']")) {
+    quickDeleteCurrentUploaderItem();
+  }
 });
 
 document.addEventListener("change", (event) => {
@@ -384,17 +407,36 @@ document.addEventListener("input", (event) => {
 });
 
 document.addEventListener("keydown", (event) => {
-  if (!lightboxState.open) return;
-  if (event.key === "Escape") closeLightbox();
-  if (event.key === "ArrowLeft") stepLightbox(-1);
-  if (event.key === "ArrowRight") stepLightbox(1);
+  if (lightboxState.open) {
+    if (event.key === "Escape") closeLightbox();
+    if (event.key === "ArrowLeft") stepLightbox(-1);
+    if (event.key === "ArrowRight") stepLightbox(1);
+  }
+  if (uploaderLightboxState.open) {
+    if (event.key === "Escape") closeUploaderLightbox();
+    if (event.key === "ArrowLeft") stepUploaderLightbox(-1);
+    if (event.key === "ArrowRight") stepUploaderLightbox(1);
+  }
 });
 
 const form = document.getElementById("config-form");
 if (form) {
+  const volumeInput = form.querySelector("[name='sample_sound_volume']");
+  const volumeText = form.querySelector("[data-role='sample-volume-text']");
+  if (volumeInput && volumeText) {
+    const updateVolumeText = () => {
+      const val = Number.parseFloat(volumeInput.value);
+      const percent = Number.isFinite(val) ? Math.round(val * 100) : 100;
+      volumeText.textContent = `${percent}%`;
+    };
+    updateVolumeText();
+    volumeInput.addEventListener("input", updateVolumeText);
+  }
+
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
     const cameraId = form.dataset.id;
+    const sampleSoundVolume = Number.parseFloat(form.sample_sound_volume.value);
     const payload = {
       name: form.name.value,
       sampling: {
@@ -403,6 +445,7 @@ if (form) {
       },
       recent_samples_limit: parseInt(form.recent_samples_limit.value, 10),
       sample_sound_file: form.sample_sound_file.value.trim(),
+      sample_sound_volume: Number.isFinite(sampleSoundVolume) ? sampleSoundVolume : 1,
     };
 
     const response = await fetch(`/api/cameras/${cameraId}/config`, {
@@ -423,9 +466,220 @@ if (form) {
   });
 }
 
+const uploaderForm = document.getElementById("uploader-form");
+const uploaderLightboxState = {
+  items: [],
+  index: 0,
+  open: false,
+};
+
+function collectUploaderItems() {
+  return Array.from(document.querySelectorAll("[data-role='uploader-link']"));
+}
+
+function rebuildUploaderLightboxItems() {
+  uploaderLightboxState.items = collectUploaderItems().map((item) => ({
+    id: parseInt(item.dataset.id || "0", 10),
+    href: item.getAttribute("href"),
+    file: item.dataset.file || "",
+    storagePath: item.dataset.storagePath || "",
+    mediaType: item.dataset.mediaType || "image",
+    posterUrl: item.dataset.posterUrl || "",
+  }));
+}
+
+function renderUploaderLightbox() {
+  const stage = document.querySelector("[data-role='uploader-lightbox-stage']");
+  const meta = document.querySelector("[data-role='uploader-lightbox-meta']");
+  const strip = document.querySelector("[data-role='uploader-lightbox-strip']");
+  if (!stage || !meta || !strip || uploaderLightboxState.items.length === 0) return;
+
+  const current = uploaderLightboxState.items[uploaderLightboxState.index];
+  stage.innerHTML = "";
+  if (current.mediaType === "video") {
+    const video = document.createElement("video");
+    video.src = current.href;
+    if (current.posterUrl) video.poster = current.posterUrl;
+    video.controls = true;
+    video.autoplay = true;
+    video.muted = true;
+    video.playsInline = true;
+    video.preload = "metadata";
+    stage.appendChild(video);
+  } else {
+    const img = document.createElement("img");
+    img.src = current.href;
+    img.alt = current.file || "media";
+    stage.appendChild(img);
+  }
+
+  meta.textContent = `${current.file || "未命名媒体"}  (${uploaderLightboxState.index + 1}/${uploaderLightboxState.items.length})`;
+  strip.innerHTML = "";
+  uploaderLightboxState.items.forEach((item, idx) => {
+    const node = item.mediaType === "video" ? document.createElement("video") : document.createElement("img");
+    node.src = item.href;
+    node.className = `lightbox-thumb${idx === uploaderLightboxState.index ? " active" : ""}`;
+    if (item.mediaType === "video") {
+      node.preload = "metadata";
+      node.muted = true;
+    }
+    node.addEventListener("click", () => {
+      uploaderLightboxState.index = idx;
+      renderUploaderLightbox();
+    });
+    strip.appendChild(node);
+  });
+}
+
+function openUploaderLightboxByFile(fileName) {
+  rebuildUploaderLightboxItems();
+  if (uploaderLightboxState.items.length === 0) return;
+  const idx = uploaderLightboxState.items.findIndex((item) => item.file === fileName);
+  uploaderLightboxState.index = idx >= 0 ? idx : 0;
+  uploaderLightboxState.open = true;
+  const lightbox = document.querySelector("[data-role='uploader-lightbox']");
+  if (lightbox) {
+    lightbox.classList.add("open");
+    lightbox.setAttribute("aria-hidden", "false");
+  }
+  document.body.style.overflow = "hidden";
+  renderUploaderLightbox();
+}
+
+function closeUploaderLightbox() {
+  uploaderLightboxState.open = false;
+  const lightbox = document.querySelector("[data-role='uploader-lightbox']");
+  if (lightbox) {
+    lightbox.classList.remove("open");
+    lightbox.setAttribute("aria-hidden", "true");
+  }
+  if (!lightboxState.open) {
+    document.body.style.overflow = "";
+  }
+}
+
+function stepUploaderLightbox(offset) {
+  if (!uploaderLightboxState.open || uploaderLightboxState.items.length === 0) return;
+  const total = uploaderLightboxState.items.length;
+  uploaderLightboxState.index = (uploaderLightboxState.index + offset + total) % total;
+  renderUploaderLightbox();
+}
+
+async function quickDeleteCurrentUploaderItem() {
+  if (!uploaderLightboxState.open || uploaderLightboxState.items.length === 0) return;
+  const current = uploaderLightboxState.items[uploaderLightboxState.index];
+  if (!current || !current.id) return;
+  if (!window.confirm(`确认删除 "${current.file || "当前媒体"}" 吗？`)) return;
+
+  const response = await fetch("/api/uploader/delete", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ id: current.id }),
+  });
+  if (!response.ok) return;
+
+  const node = document.querySelector(`[data-role='uploader-link'][data-id='${current.id}']`);
+  if (node) node.remove();
+
+  rebuildUploaderLightboxItems();
+  if (uploaderLightboxState.items.length === 0) {
+    closeUploaderLightbox();
+    return;
+  }
+  if (uploaderLightboxState.index >= uploaderLightboxState.items.length) {
+    uploaderLightboxState.index = uploaderLightboxState.items.length - 1;
+  }
+  renderUploaderLightbox();
+}
+
+function createUploaderCard(data) {
+  const a = document.createElement("a");
+  a.className = `recent-item uploader-item${data.media_type === "video" ? " media-video" : ""}`;
+  a.href = data.media_url;
+  a.dataset.role = "uploader-link";
+  a.dataset.id = String(data.id);
+  a.dataset.file = data.original_name;
+  a.dataset.storagePath = data.storage_path || "";
+  a.dataset.mediaType = data.media_type;
+  a.dataset.posterUrl = data.poster_url || "";
+  if (data.media_type === "video") {
+    const video = document.createElement("video");
+    video.src = data.media_url;
+    if (data.poster_url) video.poster = data.poster_url;
+    video.preload = "metadata";
+    video.muted = true;
+    video.playsInline = true;
+    a.appendChild(video);
+  } else {
+    const img = document.createElement("img");
+    img.src = data.media_url;
+    img.alt = data.original_name;
+    img.loading = "lazy";
+    a.appendChild(img);
+  }
+  const meta = document.createElement("div");
+  meta.className = "uploader-meta";
+  meta.textContent = data.original_name;
+  a.appendChild(meta);
+  return a;
+}
+
+if (uploaderForm) {
+  const uploadSelectedFiles = async (files) => {
+    const status = document.getElementById("uploader-status");
+    const grid = document.getElementById("uploader-grid");
+
+    let okCount = 0;
+    let failCount = 0;
+    for (let i = 0; i < files.length; i += 1) {
+      const file = files[i];
+      if (status) status.textContent = `正在投喂 ${i + 1}/${files.length}: ${file.name}`;
+      const payload = new FormData();
+      payload.append("file", file);
+      const response = await fetch("/api/uploader/upload", {
+        method: "POST",
+        body: payload,
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        failCount += 1;
+        continue;
+      }
+      okCount += 1;
+      if (grid) {
+        grid.prepend(createUploaderCard(data));
+      }
+    }
+
+    if (status) status.textContent = `投喂完成：成功 ${okCount} 个，失败 ${failCount} 个`;
+    const url = new URL(window.location.href);
+    url.searchParams.set("page", "1");
+    window.location.href = url.toString();
+  };
+
+  const input = document.getElementById("uploader-input");
+  if (input) {
+    input.addEventListener("change", async () => {
+      const status = document.getElementById("uploader-status");
+      const files = Array.from(input.files || []);
+      if (files.length === 0) {
+        if (status) status.textContent = "未选择文件";
+        return;
+      }
+      await uploadSelectedFiles(files);
+      input.value = "";
+    });
+  }
+
+  uploaderForm.addEventListener("submit", (event) => {
+    event.preventDefault();
+  });
+}
+
 updateRecentSelectionState();
 updateRecentEmptyState();
 applySampleFilter();
 rebuildLightboxItems();
 refreshDashboardStatus();
 setInterval(refreshDashboardStatus, 5000);
+rebuildUploaderLightboxItems();

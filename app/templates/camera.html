@@ -1,5 +1,6 @@
 {% extends 'layout.html' %}
 {% block content %}
+<a class="page-back" href="{{ url_for('dashboard.dashboard') }}">← 返回快乐家园</a>
 <h1>{{ camera.camera_name }}</h1>
 <div class="camera-detail">
   <div class="preview">
@@ -29,9 +30,13 @@
       <label>采样提示音文件
         <input type="text" name="sample_sound_file" value="{{ camera.sample_sound_file }}" placeholder="/abs/path/to/sound.wav" />
       </label>
+      <label>提示音音量
+        <input type="range" name="sample_sound_volume" min="0" max="1" step="0.01" value="{{ camera.sample_sound_volume if camera.sample_sound_volume is not none else 1.0 }}" />
+      </label>
       <div class="actions">
         <button class="btn" type="submit">保存配置</button>
         <button class="btn secondary" data-action="test-sample-sound" type="button">测试提示音</button>
+        <span class="muted" data-role="sample-volume-text">{{ ((camera.sample_sound_volume if camera.sample_sound_volume is not none else 1.0) * 100) | round(0) | int }}%</span>
         <button class="btn secondary" data-action="snapshot" type="button">强制抓拍</button>
       </div>
     </form>

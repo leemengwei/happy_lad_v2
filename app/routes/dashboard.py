@@ -1,5 +1,11 @@
 import time
-from flask import Blueprint, current_app, render_template, Response, abort, send_from_directory, url_for
+import io
+import ipaddress
+import socket
+import urllib.parse
+import urllib.request
+from flask import Blueprint, current_app, render_template, Response, abort, send_from_directory, url_for, request
+from PIL import Image, ImageDraw
 
 
 dashboard_bp = Blueprint("dashboard", __name__)
@@ -9,13 +15,70 @@ def _get_manager():
     return current_app.config["PIPELINE_MANAGER"]
 
 
+def _detect_lan_ip() -> str:
+    # Prefer the outbound interface address (works without sending traffic).
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+            sock.connect(("8.8.8.8", 80))
+            ip = sock.getsockname()[0]
+            ipaddress.ip_address(ip)
+            if not ip.startswith("127."):
+                return ip
+    except Exception:
+        pass
+
+    # Fallback to hostname resolution if needed.
+    try:
+        ip = socket.gethostbyname(socket.gethostname())
+        ipaddress.ip_address(ip)
+        if not ip.startswith("127."):
+            return ip
+    except Exception:
+        pass
+    return "127.0.0.1"
+
+
 
 
 @dashboard_bp.route("/")
 def dashboard():
     manager = _get_manager()
     status_list = manager.list_status()
-    return render_template("dashboard.html", cameras=status_list)
+    media_items = current_app.config["MEDIA_LIBRARY"].list_media(limit=12)
+    return render_template("dashboard.html", cameras=status_list, media_items=media_items)
+
+
+@dashboard_bp.route("/qr/home.png")
+def home_qr_png():
+    host = request.host or ""
+    if ":" in host and host.count(":") == 1:
+        _host_name, host_port = host.rsplit(":", 1)
+    else:
+        host_port = ""
+
+    resolved_host = _detect_lan_ip()
+    netloc = f"{resolved_host}:{host_port}" if host_port else resolved_host
+    target = f"{request.scheme}://{netloc}{url_for('dashboard.dashboard')}"
+    qr_url = (
+        "https://api.qrserver.com/v1/create-qr-code/"
+        f"?size=240x240&margin=0&data={urllib.parse.quote(target, safe='')}"
+    )
+    try:
+        with urllib.request.urlopen(qr_url, timeout=5) as response:
+            body = response.read()
+            if body:
+                return Response(body, mimetype="image/png")
+    except Exception:
+        pass
+
+    # Fallback placeholder if upstream QR service is temporarily unavailable.
+    image = Image.new("RGB", (240, 240), color=(255, 255, 255))
+    draw = ImageDraw.Draw(image)
+    draw.rectangle((0, 0, 239, 239), outline=(160, 160, 160), width=2)
+    draw.text((20, 108), "QR Unavailable", fill=(80, 80, 80))
+    buf = io.BytesIO()
+    image.save(buf, format="PNG")
+    return Response(buf.getvalue(), mimetype="image/png")
 
 
 @dashboard_bp.route("/diagnostics")
@@ -34,6 +97,50 @@ def diagnostics():
         cameras=status_list,
         stale_threshold_seconds=stale_threshold_seconds,
         stale_cameras=stale_cameras,
+    )
+
+
+@dashboard_bp.route("/uploader")
+def uploader():
+    media_library = current_app.config["MEDIA_LIBRARY"]
+    try:
+        page = int(request.args.get("page", 1))
+    except Exception:
+        page = 1
+    try:
+        per_page = int(request.args.get("per_page", 50))
+    except Exception:
+        per_page = 50
+    per_page = max(20, min(per_page, 1000))
+    sort_by = request.args.get("sort_by", "captured")
+    sort_order = request.args.get("sort_order", "desc")
+
+    result = media_library.list_media_paginated(
+        page=page,
+        per_page=per_page,
+        sort_by=sort_by,
+        sort_order=sort_order,
+    )
+    total = result["total"]
+    total_pages = max(1, (total + per_page - 1) // per_page)
+    page = min(max(1, result["page"]), total_pages)
+    if page != result["page"]:
+        result = media_library.list_media_paginated(
+            page=page,
+            per_page=per_page,
+            sort_by=sort_by,
+            sort_order=sort_order,
+        )
+
+    return render_template(
+        "uploader.html",
+        media_items=result["items"],
+        total=total,
+        page=page,
+        per_page=per_page,
+        total_pages=total_pages,
+        sort_by=result["sort_by"],
+        sort_order=result["sort_order"],
     )
 
 
@@ -86,3 +193,8 @@ def sample_media(camera_id: str, filename: str):
         abort(404)
     pipeline = manager.get_pipeline(camera_id)
     return send_from_directory(pipeline.storage.base_dir, filename)
+
+
+@dashboard_bp.route("/uploads/<path:filename>")
+def uploaded_media(filename: str):
+    return send_from_directory(current_app.config["UPLOADS_DIR"], filename)

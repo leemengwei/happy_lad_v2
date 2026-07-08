@@ -1,0 +1,88 @@
+{% extends 'layout.html' %}
+{% block content %}
+<a class="page-back" href="{{ url_for('dashboard.dashboard') }}">← 返回快乐家园</a>
+<h1>小帽子媒体上传</h1>
+<div class="panel">
+  <form id="uploader-form" class="config-form uploader-form">
+    <input
+      id="uploader-input"
+      class="uploader-input"
+      type="file"
+      multiple
+      accept=".jpg,.jpeg,.png,.gif,.webp,.heic,.heif,.mov,.mp4,.m4v,.3gp,.hevc,image/*,video/*"
+    />
+    <label class="btn uploader-trigger" for="uploader-input">投喂小帽子</label>
+  </form>
+  <div class="muted" id="uploader-status"></div>
+</div>
+
+<section class="recent">
+  <h3>冒冒小展厅</h3>
+  <div class="actions recent-actions">
+    <form method="get" class="pager-form">
+      <input type="hidden" name="page" value="1" />
+      <label class="pager-label">排序
+        <select name="sort_by">
+          <option value="uploaded" {% if sort_by == 'uploaded' %}selected{% endif %}>上传时间</option>
+          <option value="captured" {% if sort_by == 'captured' %}selected{% endif %}>拍摄时间</option>
+          <option value="size" {% if sort_by == 'size' %}selected{% endif %}>大小</option>
+          <option value="name" {% if sort_by == 'name' %}selected{% endif %}>文件名</option>
+        </select>
+      </label>
+      <label class="pager-label">顺序
+        <select name="sort_order">
+          <option value="desc" {% if sort_order == 'desc' %}selected{% endif %}>降序</option>
+          <option value="asc" {% if sort_order == 'asc' %}selected{% endif %}>升序</option>
+        </select>
+      </label>
+      <label class="pager-label">当页最多
+        <select name="per_page">
+          {% for v in [50, 100, 200, 300, 500, 1000] %}
+          <option value="{{ v }}" {% if per_page == v %}selected{% endif %}>{{ v }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <button class="btn secondary" type="submit">应用</button>
+    </form>
+    <div class="pager-text">第 {{ page }} / {{ total_pages }} 页 · 共 {{ total }} 条</div>
+    <div class="actions">
+      <a class="btn secondary {% if page <= 1 %}disabled-link{% endif %}" href="{{ url_for('dashboard.uploader', page=page-1 if page>1 else 1, per_page=per_page, sort_by=sort_by, sort_order=sort_order) }}">上一页</a>
+      <a class="btn secondary {% if page >= total_pages %}disabled-link{% endif %}" href="{{ url_for('dashboard.uploader', page=page+1 if page<total_pages else total_pages, per_page=per_page, sort_by=sort_by, sort_order=sort_order) }}">下一页</a>
+    </div>
+  </div>
+  <div class="recent-grid" id="uploader-grid">
+    {% for item in media_items %}
+    <a
+      class="recent-item uploader-item {% if item.media_type == 'video' %}media-video{% endif %}"
+      href="{{ item.media_url }}"
+      data-role="uploader-link"
+      data-id="{{ item.id }}"
+      data-file="{{ item.original_name }}"
+      data-storage-path="{{ item.storage_path }}"
+      data-media-type="{{ item.media_type }}"
+      data-poster-url="{{ item.poster_url or '' }}"
+    >
+      {% if item.media_type == 'image' %}
+      <img src="{{ item.media_url }}" alt="{{ item.original_name }}" loading="lazy" />
+      {% else %}
+      <video src="{{ item.media_url }}" {% if item.poster_url %}poster="{{ item.poster_url }}"{% endif %} preload="metadata" muted playsinline></video>
+      {% endif %}
+      <div class="uploader-meta">{{ item.original_name }}</div>
+    </a>
+    {% endfor %}
+  </div>
+</section>
+
+<div class="lightbox" data-role="uploader-lightbox" aria-hidden="true">
+  <div class="lightbox-backdrop" data-action="uploader-lightbox-close"></div>
+  <div class="lightbox-dialog" role="dialog" aria-label="宝宝媒体预览">
+    <button class="lightbox-close" type="button" data-action="uploader-lightbox-close" aria-label="关闭">×</button>
+    <button class="lightbox-delete" type="button" data-action="uploader-lightbox-delete" aria-label="快速删除">删除当前</button>
+    <button class="lightbox-nav prev" type="button" data-action="uploader-lightbox-prev" aria-label="上一张">‹</button>
+    <div class="uploader-lightbox-stage" data-role="uploader-lightbox-stage"></div>
+    <button class="lightbox-nav next" type="button" data-action="uploader-lightbox-next" aria-label="下一张">›</button>
+    <div class="lightbox-meta" data-role="uploader-lightbox-meta"></div>
+    <div class="lightbox-strip" data-role="uploader-lightbox-strip"></div>
+  </div>
+</div>
+{% endblock %}

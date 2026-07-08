@@ -20,6 +20,7 @@ class CameraConfig:
     model_config: str
     storage_dir: str
     sample_sound_file: str
+    sample_sound_volume: float
     recent_samples_limit: int
     sampling: SamplingConfig
 
@@ -50,6 +51,7 @@ def load_config(path: str) -> AppConfig:
                     "sample_sound_file",
                     "/usr/share/sounds/alsa/Front_Center.wav",
                 ),
+                sample_sound_volume=min(1.0, max(0.0, float(raw.get("sample_sound_volume", 1.0)))),
                 recent_samples_limit=max(0, int(raw.get("recent_samples_limit", 16))),
                 sampling=SamplingConfig(
                     time_span_years=float(sampling.get("time_span_years", 10)),

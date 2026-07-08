@@ -3,3 +3,5 @@ images/
 *.whl
 .venv/
 *.pyc
+data/
+uploads/

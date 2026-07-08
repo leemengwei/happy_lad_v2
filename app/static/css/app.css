@@ -26,10 +26,76 @@ body {
   padding: 20px;
 }
 
+.page-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  text-decoration: none;
+  color: #1f2a44;
+  background: #eef2ff;
+  border: 1px solid #d7dff7;
+  border-radius: 999px;
+  padding: 6px 12px;
+  margin: 0 0 12px;
+  font-size: 0.9rem;
+}
+
+.page-back:hover {
+  background: #e4ebff;
+}
+
 .grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
   gap: 16px;
+}
+
+.album-entry {
+  margin-bottom: 16px;
+}
+
+.album-entry-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+}
+
+.home-qr {
+  display: grid;
+  gap: 6px;
+  justify-items: center;
+  text-align: center;
+}
+
+.home-qr img {
+  width: 90px;
+  height: 90px;
+  border-radius: 8px;
+  border: 1px solid #d7ddea;
+  background: #fff;
+}
+
+.album-thumbs {
+  margin-top: 10px;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(88px, 1fr));
+  gap: 8px;
+}
+
+.album-thumb img,
+.album-thumb video {
+  width: 100%;
+  height: 70px;
+  object-fit: cover;
+  border-radius: 8px;
+  background: #000;
+  display: block;
+}
+
+.album-thumb {
+  position: relative;
+  display: block;
 }
 
 .card {
@@ -144,6 +210,63 @@ body {
   display: block;
 }
 
+.recent-item video {
+  width: 100%;
+  height: 100px;
+  object-fit: cover;
+  border-radius: 8px;
+  background: #000;
+  display: block;
+}
+
+.uploader-meta {
+  margin-top: 6px;
+  font-size: 0.82rem;
+  color: #4b5563;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.uploader-item {
+  cursor: zoom-in;
+}
+
+.uploader-form {
+  display: flex;
+  align-items: center;
+}
+
+.uploader-input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  clip-path: inset(50%);
+}
+
+.uploader-trigger {
+  display: inline-block;
+}
+
+.uploader-lightbox-stage {
+  width: 100%;
+  height: 100%;
+  border-radius: 10px;
+  background: #0f121a;
+  overflow: hidden;
+}
+
+.uploader-lightbox-stage img,
+.uploader-lightbox-stage video {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+}
+
 .recent-actions {
   margin-bottom: 10px;
   flex-wrap: wrap;
@@ -160,6 +283,42 @@ body {
   transform: translateY(-2px);
 }
 
+.media-video::before {
+  content: "VIDEO";
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  z-index: 2;
+  font-size: 0.65rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: #fff;
+  background: rgba(19, 28, 48, 0.8);
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  border-radius: 999px;
+  padding: 2px 7px;
+  pointer-events: none;
+}
+
+.media-video::after {
+  content: "▶";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 2;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font-size: 0.9rem;
+  color: #fff;
+  background: rgba(0, 0, 0, 0.45);
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  pointer-events: none;
+}
+
 [data-role="sample-link"] {
   display: block;
   cursor: zoom-in;
@@ -171,6 +330,39 @@ body {
   border: 1px solid #d0d4e0;
   border-radius: 6px;
   background: #fff;
+}
+
+.pager-form {
+  margin: 0;
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.pager-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.9rem;
+  color: #374151;
+}
+
+.pager-label select {
+  border: 1px solid #d0d4e0;
+  border-radius: 6px;
+  background: #fff;
+  padding: 6px 8px;
+}
+
+.pager-text {
+  font-size: 0.9rem;
+  color: #6b7280;
+}
+
+.disabled-link {
+  opacity: 0.5;
+  pointer-events: none;
 }
 
 .diag-table {
@@ -247,7 +439,7 @@ body {
 .lightbox-delete {
   position: absolute;
   top: 10px;
-  right: 56px;
+  left: 10px;
   border: none;
   background: rgba(195, 42, 42, 0.92);
   color: #fff;
@@ -341,5 +533,10 @@ body {
 @media (max-width: 960px) {
   .camera-detail {
     grid-template-columns: 1fr;
+  }
+
+  .album-entry-header {
+    flex-direction: column;
+    align-items: flex-start;
   }
 }

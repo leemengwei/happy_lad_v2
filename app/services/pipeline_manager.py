@@ -1,4 +1,5 @@
 import logging
+import os
 import threading
 import time
 from typing import Dict, Optional
@@ -35,6 +36,7 @@ class PipelineManager:
                 sampling_policy=sampling_policy,
                 storage=storage,
                 sample_sound_file=camera.sample_sound_file,
+                sample_sound_volume=camera.sample_sound_volume,
                 recent_samples_limit=camera.recent_samples_limit,
             )
             self.pipelines[camera.id] = pipeline
@@ -69,10 +71,34 @@ class PipelineManager:
 
     def _watchdog_loop(self) -> None:
         while not self._watchdog_stop.wait(10):
-            for pipeline in self.pipelines.values():
-                if pipeline.is_stalled(timeout_seconds=30):
-                    logger.warning(
-                        "Watchdog detected stalled stream for %s, restarting.",
-                        pipeline.camera_id,
-                    )
-                    pipeline.restart()
+            try:
+                for pipeline in self.pipelines.values():
+                    try:
+                        if not pipeline._running:
+                            if os.path.exists(pipeline.device):
+                                logger.warning(
+                                    "Watchdog detected stopped stream for %s with device present, restarting.",
+                                    pipeline.camera_id,
+                                )
+                                pipeline.restart()
+                            else:
+                                logger.warning(
+                                    "Watchdog detected stopped stream for %s, device missing: %s",
+                                    pipeline.camera_id,
+                                    pipeline.device,
+                                )
+                            continue
+
+                        if pipeline.is_stalled(timeout_seconds=30):
+                            logger.warning(
+                                "Watchdog detected stalled stream for %s, restarting.",
+                                pipeline.camera_id,
+                            )
+                            pipeline.restart()
+                    except Exception:
+                        logger.exception(
+                            "Watchdog failed while handling camera %s",
+                            pipeline.camera_id,
+                        )
+            except Exception:
+                logger.exception("Watchdog loop crashed unexpectedly; continuing")

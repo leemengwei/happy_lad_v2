@@ -1,5 +1,6 @@
 {% extends 'layout.html' %}
 {% block content %}
+<a class="page-back" href="{{ url_for('dashboard.dashboard') }}">← 返回快乐家园</a>
 <h1>服务诊断</h1>
 <div class="panel">
   <div>相机总数: {{ cameras|length }}</div>
