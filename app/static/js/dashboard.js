@@ -467,42 +467,90 @@ if (form) {
 }
 
 const uploaderForm = document.getElementById("uploader-form");
+const BABY_BIRTHDAY = new Date("2026-06-29T00:00:00");
 const uploaderLightboxState = {
   items: [],
   index: 0,
   open: false,
+  source: "gallery",
 };
 
-function collectUploaderItems() {
-  return Array.from(document.querySelectorAll("[data-role='uploader-link']"));
+function formatTimeForDisplay(input) {
+  if (!input) return "未知";
+  const date = new Date(input);
+  if (Number.isNaN(date.getTime())) return "未知";
+  return date.toLocaleString("zh-CN", { hour12: false });
 }
 
-function rebuildUploaderLightboxItems() {
-  uploaderLightboxState.items = collectUploaderItems().map((item) => ({
+function computeBabyAgeText(input) {
+  const date = new Date(input);
+  if (Number.isNaN(date.getTime())) return "未知";
+  let years = date.getFullYear() - BABY_BIRTHDAY.getFullYear();
+  let months = date.getMonth() - BABY_BIRTHDAY.getMonth();
+  let days = date.getDate() - BABY_BIRTHDAY.getDate();
+  if (days < 0) {
+    months -= 1;
+    const prevMonthDays = new Date(date.getFullYear(), date.getMonth(), 0).getDate();
+    days += prevMonthDays;
+  }
+  if (months < 0) {
+    years -= 1;
+    months += 12;
+  }
+  if (years < 0) return "未出生";
+  return `${years}岁${months}个月${days}天`;
+}
+
+function updateUploaderNavState() {
+  const prev = document.querySelector("[data-action='uploader-lightbox-prev']");
+  const next = document.querySelector("[data-action='uploader-lightbox-next']");
+  const total = uploaderLightboxState.items.length;
+  const atStart = uploaderLightboxState.index <= 0;
+  const atEnd = uploaderLightboxState.index >= total - 1;
+  if (prev) prev.disabled = total <= 1 || atStart;
+  if (next) next.disabled = total <= 1 || atEnd;
+}
+
+function collectUploaderItems(source = "gallery") {
+  const selector = source === "trash" ? "[data-role='trash-link']" : "[data-role='uploader-link']";
+  return Array.from(document.querySelectorAll(selector));
+}
+
+function rebuildUploaderLightboxItems(source = "gallery") {
+  uploaderLightboxState.source = source;
+  uploaderLightboxState.items = collectUploaderItems(source).map((item) => ({
     id: parseInt(item.dataset.id || "0", 10),
     href: item.getAttribute("href"),
     file: item.dataset.file || "",
     storagePath: item.dataset.storagePath || "",
     mediaType: item.dataset.mediaType || "image",
     posterUrl: item.dataset.posterUrl || "",
+    capturedAt: item.dataset.capturedAt || "",
+    createdAt: item.dataset.createdAt || "",
+    location: item.dataset.location || "",
   }));
 }
 
 function renderUploaderLightbox() {
   const stage = document.querySelector("[data-role='uploader-lightbox-stage']");
   const meta = document.querySelector("[data-role='uploader-lightbox-meta']");
+  const statusBar = document.querySelector("[data-role='uploader-lightbox-status']");
   const strip = document.querySelector("[data-role='uploader-lightbox-strip']");
-  if (!stage || !meta || !strip || uploaderLightboxState.items.length === 0) return;
+  if (!stage || !meta || !strip || !statusBar || uploaderLightboxState.items.length === 0) return;
 
   const current = uploaderLightboxState.items[uploaderLightboxState.index];
+  const deleteButton = document.querySelector("[data-action='uploader-lightbox-delete']");
+  if (deleteButton) {
+    deleteButton.style.display = uploaderLightboxState.source === "trash" ? "none" : "";
+  }
   stage.innerHTML = "";
   if (current.mediaType === "video") {
     const video = document.createElement("video");
     video.src = current.href;
     if (current.posterUrl) video.poster = current.posterUrl;
     video.controls = true;
-    video.autoplay = true;
-    video.muted = true;
+    video.autoplay = false;
+    video.muted = false;
     video.playsInline = true;
     video.preload = "metadata";
     stage.appendChild(video);
@@ -514,6 +562,8 @@ function renderUploaderLightbox() {
   }
 
   meta.textContent = `${current.file || "未命名媒体"}  (${uploaderLightboxState.index + 1}/${uploaderLightboxState.items.length})`;
+  const shotTime = current.capturedAt || current.createdAt;
+  statusBar.textContent = `拍摄时间: ${formatTimeForDisplay(shotTime)} ｜ 拍摄地点: ${current.location || "未知"} ｜ 冒冒年龄: ${computeBabyAgeText(shotTime)}`;
   strip.innerHTML = "";
   uploaderLightboxState.items.forEach((item, idx) => {
     const node = item.mediaType === "video" ? document.createElement("video") : document.createElement("img");
@@ -529,10 +579,11 @@ function renderUploaderLightbox() {
     });
     strip.appendChild(node);
   });
+  updateUploaderNavState();
 }
 
-function openUploaderLightboxByFile(fileName) {
-  rebuildUploaderLightboxItems();
+function openUploaderLightboxByFile(fileName, source = "gallery") {
+  rebuildUploaderLightboxItems(source);
   if (uploaderLightboxState.items.length === 0) return;
   const idx = uploaderLightboxState.items.findIndex((item) => item.file === fileName);
   uploaderLightboxState.index = idx >= 0 ? idx : 0;
@@ -561,7 +612,12 @@ function closeUploaderLightbox() {
 function stepUploaderLightbox(offset) {
   if (!uploaderLightboxState.open || uploaderLightboxState.items.length === 0) return;
   const total = uploaderLightboxState.items.length;
-  uploaderLightboxState.index = (uploaderLightboxState.index + offset + total) % total;
+  const nextIndex = uploaderLightboxState.index + offset;
+  if (nextIndex < 0 || nextIndex >= total) {
+    updateUploaderNavState();
+    return;
+  }
+  uploaderLightboxState.index = nextIndex;
   renderUploaderLightbox();
 }
 
@@ -569,7 +625,7 @@ async function quickDeleteCurrentUploaderItem() {
   if (!uploaderLightboxState.open || uploaderLightboxState.items.length === 0) return;
   const current = uploaderLightboxState.items[uploaderLightboxState.index];
   if (!current || !current.id) return;
-  if (!window.confirm(`确认删除 "${current.file || "当前媒体"}" 吗？`)) return;
+  if (!window.confirm(`确认删除 "${current.file || "当前媒体"}" 吗？将移入回收站（7天后自动删除）`)) return;
 
   const response = await fetch("/api/uploader/delete", {
     method: "POST",
@@ -577,6 +633,11 @@ async function quickDeleteCurrentUploaderItem() {
     body: JSON.stringify({ id: current.id }),
   });
   if (!response.ok) return;
+  const data = await response.json();
+  const status = document.getElementById("uploader-status");
+  if (status && data.purge_at) {
+    status.textContent = `已移入回收站，自动删除时间：${formatTimeForDisplay(data.purge_at)}`;
+  }
 
   const node = document.querySelector(`[data-role='uploader-link'][data-id='${current.id}']`);
   if (node) node.remove();
@@ -602,6 +663,9 @@ function createUploaderCard(data) {
   a.dataset.storagePath = data.storage_path || "";
   a.dataset.mediaType = data.media_type;
   a.dataset.posterUrl = data.poster_url || "";
+  a.dataset.capturedAt = data.captured_at || "";
+  a.dataset.createdAt = data.created_at || new Date().toISOString();
+  a.dataset.location = data.location_text || "";
   if (data.media_type === "video") {
     const video = document.createElement("video");
     video.src = data.media_url;
@@ -622,6 +686,44 @@ function createUploaderCard(data) {
   meta.textContent = data.original_name;
   a.appendChild(meta);
   return a;
+}
+
+async function handleTrashAction(action, mediaId) {
+  const endpoint = action === "restore" ? "/api/uploader/trash/restore" : "/api/uploader/trash/delete";
+  const response = await fetch(endpoint, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ id: mediaId }),
+  });
+  if (!response.ok) return;
+  const row = document.querySelector(`[data-role='trash-item'][data-id='${mediaId}']`);
+  if (row) row.remove();
+  const empty = document.querySelector("[data-role='trash-item']");
+  const container = document.getElementById("uploader-trash-list");
+  if (!empty && container && !document.getElementById("uploader-trash-empty")) {
+    const node = document.createElement("div");
+    node.id = "uploader-trash-empty";
+    node.className = "muted";
+    node.textContent = "回收站是空的";
+    container.appendChild(node);
+  }
+  if (action === "restore") {
+    window.location.reload();
+  }
+}
+
+function toggleTrashPanel() {
+  const panel = document.getElementById("uploader-trash-panel");
+  const toggle = document.querySelector("[data-action='trash-toggle']");
+  if (!panel || !toggle) return;
+  const isHidden = panel.hasAttribute("hidden");
+  if (isHidden) {
+    panel.removeAttribute("hidden");
+    toggle.setAttribute("aria-expanded", "true");
+  } else {
+    panel.setAttribute("hidden", "");
+    toggle.setAttribute("aria-expanded", "false");
+  }
 }
 
 if (uploaderForm) {
@@ -675,6 +777,25 @@ if (uploaderForm) {
     event.preventDefault();
   });
 }
+
+document.addEventListener("click", async (event) => {
+  const target = event.target;
+  if (!(target instanceof HTMLElement)) return;
+  if (target.matches("[data-action='trash-restore']")) {
+    await handleTrashAction("restore", parseInt(target.dataset.id || "0", 10));
+  }
+  if (target.matches("[data-action='trash-delete']")) {
+    await handleTrashAction("delete", parseInt(target.dataset.id || "0", 10));
+  }
+  if (target.matches("[data-action='trash-toggle']")) {
+    toggleTrashPanel();
+  }
+  if (target.matches("[data-role='trash-link']") || target.closest("[data-role='trash-link']")) {
+    event.preventDefault();
+    const link = target.matches("[data-role='trash-link']") ? target : target.closest("[data-role='trash-link']");
+    openUploaderLightboxByFile(link.dataset.file || "", "trash");
+  }
+});
 
 updateRecentSelectionState();
 updateRecentEmptyState();

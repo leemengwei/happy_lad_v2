@@ -1,6 +1,6 @@
 import yaml
 from dataclasses import dataclass
-from typing import List
+from typing import List, Optional
 
 
 @dataclass
@@ -26,8 +26,18 @@ class CameraConfig:
 
 
 @dataclass
+class SystemConfig:
+    abnormal_min_active_streams: int
+    abnormal_reboot_after_hours: float
+    auto_reboot_enabled: bool
+    reboot_command: List[str]
+    reboot_sudo_password: Optional[str]
+
+
+@dataclass
 class AppConfig:
     cameras: List[CameraConfig]
+    system: SystemConfig
 
 
 def load_config(path: str) -> AppConfig:
@@ -60,4 +70,21 @@ def load_config(path: str) -> AppConfig:
             )
         )
 
-    return AppConfig(cameras=cameras)
+    raw_system = data.get("system", {}) or {}
+    reboot_command = raw_system.get("reboot_command", ["sudo", "-n", "systemctl", "reboot"])
+    if not isinstance(reboot_command, list) or not reboot_command:
+        reboot_command = ["sudo", "-n", "systemctl", "reboot"]
+
+    system = SystemConfig(
+        abnormal_min_active_streams=max(0, int(raw_system.get("abnormal_min_active_streams", 2))),
+        abnormal_reboot_after_hours=max(0.0, float(raw_system.get("abnormal_reboot_after_hours", 3.0))),
+        auto_reboot_enabled=bool(raw_system.get("auto_reboot_enabled", True)),
+        reboot_command=[str(item) for item in reboot_command],
+        reboot_sudo_password=(
+            str(raw_system.get("reboot_sudo_password")).strip()
+            if raw_system.get("reboot_sudo_password") is not None
+            else None
+        ),
+    )
+
+    return AppConfig(cameras=cameras, system=system)

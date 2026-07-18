@@ -62,6 +62,71 @@ def _extract_captured_at(abs_path: str, ext: str, media_type: str):
     return None
 
 
+def _ratio_to_float(value):
+    try:
+        if hasattr(value, "numerator") and hasattr(value, "denominator"):
+            if value.denominator == 0:
+                return None
+            return float(value.numerator) / float(value.denominator)
+        if isinstance(value, (tuple, list)) and len(value) == 2:
+            den = float(value[1])
+            if den == 0:
+                return None
+            return float(value[0]) / den
+        return float(value)
+    except Exception:
+        return None
+
+
+def _dms_to_decimal(dms_values, ref):
+    if not dms_values or len(dms_values) < 3:
+        return None
+    degree = _ratio_to_float(dms_values[0])
+    minute = _ratio_to_float(dms_values[1])
+    second = _ratio_to_float(dms_values[2])
+    if degree is None or minute is None or second is None:
+        return None
+    result = degree + (minute / 60.0) + (second / 3600.0)
+    if str(ref or "").upper() in {"S", "W"}:
+        result *= -1
+    return result
+
+
+def _extract_image_location(abs_path: str, media_type: str):
+    if media_type != "image":
+        return None, None, None
+    try:
+        with Image.open(abs_path) as img:
+            exif = img.getexif()
+            if not exif:
+                return None, None, None
+            gps_info = None
+            try:
+                gps_info = exif.get_ifd(0x8825)
+            except Exception:
+                gps_info = None
+            if not gps_info:
+                for tag_id, raw in exif.items():
+                    tag_name = ExifTags.TAGS.get(tag_id, str(tag_id))
+                    if tag_name == "GPSInfo":
+                        gps_info = raw
+                        break
+            if not gps_info:
+                return None, None, None
+            gps_named = {}
+            for key, value in gps_info.items():
+                gps_named[ExifTags.GPSTAGS.get(key, str(key))] = value
+            lat = _dms_to_decimal(gps_named.get("GPSLatitude"), gps_named.get("GPSLatitudeRef"))
+            lng = _dms_to_decimal(gps_named.get("GPSLongitude"), gps_named.get("GPSLongitudeRef"))
+            if lat is None or lng is None:
+                return None, None, None
+            location_text = f"{lat:.6f}, {lng:.6f}"
+            return lat, lng, location_text
+    except Exception:
+        return None, None, None
+    return None, None, None
+
+
 def _generate_video_poster(abs_video_path: str, rel_video_path: str):
     rel_root, _ext = os.path.splitext(rel_video_path)
     poster_rel_path = f"{rel_root}_poster.jpg"
@@ -291,6 +356,23 @@ def upload_media():
     poster_url = None
     if media_type == "video":
         poster_path, poster_url = _generate_video_poster(generated["abs_path"], generated["rel_path"])
+    captured_at = _extract_captured_at(generated["abs_path"], ext, media_type)
+    latitude, longitude, location_text = _extract_image_location(generated["abs_path"], media_type)
+    manual_latitude = request.form.get("latitude")
+    manual_longitude = request.form.get("longitude")
+    manual_location_text = (request.form.get("location_text") or "").strip()
+    try:
+        manual_latitude = float(manual_latitude) if manual_latitude not in (None, "") else None
+    except Exception:
+        manual_latitude = None
+    try:
+        manual_longitude = float(manual_longitude) if manual_longitude not in (None, "") else None
+    except Exception:
+        manual_longitude = None
+    if manual_latitude is not None and manual_longitude is not None:
+        latitude = manual_latitude
+        longitude = manual_longitude
+        location_text = manual_location_text or f"{latitude:.6f}, {longitude:.6f}"
 
     normalized_name = _normalize_uploaded_name(original_name, ext, generated["stored_name"])
 
@@ -305,7 +387,10 @@ def upload_media():
         media_url=media_url,
         poster_path=poster_path,
         poster_url=poster_url,
-        captured_at=_extract_captured_at(generated["abs_path"], ext, media_type),
+        captured_at=captured_at,
+        latitude=latitude,
+        longitude=longitude,
+        location_text=location_text,
     )
     return jsonify(
         {
@@ -317,6 +402,10 @@ def upload_media():
             "storage_path": generated["rel_path"],
             "media_url": media_url,
             "poster_url": poster_url,
+            "captured_at": captured_at,
+            "latitude": latitude,
+            "longitude": longitude,
+            "location_text": location_text,
         }
     )
 
@@ -367,7 +456,47 @@ def delete_uploaded_media():
         return _bad_request("id must be integer")
 
     media_library = current_app.config["MEDIA_LIBRARY"]
-    result = media_library.delete_media(media_id)
+    result = media_library.move_to_trash(media_id)
+    if not result.get("moved"):
+        return jsonify({"error": "media not found"}), 404
+    return jsonify({"status": "ok", "id": media_id, "purge_at": result.get("purge_at")})
+
+
+@api_bp.get("/uploader/trash")
+def list_uploader_trash():
+    media_library = current_app.config["MEDIA_LIBRARY"]
+    return jsonify({"items": media_library.list_trash(limit=300)})
+
+
+@api_bp.post("/uploader/trash/restore")
+def restore_uploader_trash():
+    payload = request.get_json(force=True, silent=True) or {}
+    media_id = payload.get("id")
+    if media_id is None:
+        return _bad_request("id is required")
+    try:
+        media_id = int(media_id)
+    except (TypeError, ValueError):
+        return _bad_request("id must be integer")
+    media_library = current_app.config["MEDIA_LIBRARY"]
+    result = media_library.restore_from_trash(media_id)
+    if not result.get("restored"):
+        return jsonify({"error": "media not found in trash"}), 404
+    return jsonify({"status": "ok", "id": media_id})
+
+
+@api_bp.post("/uploader/trash/delete")
+def permanently_delete_uploader_trash():
+    payload = request.get_json(force=True, silent=True) or {}
+    media_id = payload.get("id")
+    if media_id is None:
+        return _bad_request("id is required")
+    try:
+        media_id = int(media_id)
+    except (TypeError, ValueError):
+        return _bad_request("id must be integer")
+    media_library = current_app.config["MEDIA_LIBRARY"]
+    result = media_library.permanently_delete(media_id)
     if not result.get("deleted"):
         return jsonify({"error": "media not found"}), 404
     return jsonify({"status": "ok", "id": media_id})

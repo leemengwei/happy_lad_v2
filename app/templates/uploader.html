@@ -1,20 +1,55 @@
 {% extends 'layout.html' %}
 {% block content %}
+{% macro render_uploader_item(item) -%}
+<a
+  class="recent-item uploader-item {% if item.media_type == 'video' %}media-video{% endif %}"
+  href="{{ item.media_url }}"
+  data-role="uploader-link"
+  data-id="{{ item.id }}"
+  data-file="{{ item.original_name }}"
+  data-storage-path="{{ item.storage_path }}"
+  data-media-type="{{ item.media_type }}"
+  data-poster-url="{{ item.poster_url or '' }}"
+  data-captured-at="{{ item.captured_at or '' }}"
+  data-created-at="{{ item.created_at or '' }}"
+  data-location="{{ item.location_text or '' }}"
+>
+  {% if item.media_type == 'image' %}
+  <img src="{{ item.media_url }}" alt="{{ item.original_name }}" loading="lazy" />
+  {% else %}
+  <video src="{{ item.media_url }}" {% if item.poster_url %}poster="{{ item.poster_url }}"{% endif %} preload="metadata" muted playsinline></video>
+  {% endif %}
+  <div class="uploader-meta">{{ item.original_name }}</div>
+</a>
+{%- endmacro %}
 <a class="page-back" href="{{ url_for('dashboard.dashboard') }}">← 返回快乐家园</a>
 <h1>小帽子媒体上传</h1>
-<div class="panel">
-  <form id="uploader-form" class="config-form uploader-form">
-    <input
-      id="uploader-input"
-      class="uploader-input"
-      type="file"
-      multiple
-      accept=".jpg,.jpeg,.png,.gif,.webp,.heic,.heif,.mov,.mp4,.m4v,.3gp,.hevc,image/*,video/*"
-    />
-    <label class="btn uploader-trigger" for="uploader-input">投喂小帽子</label>
-  </form>
-  <div class="muted" id="uploader-status"></div>
-</div>
+<section class="uploader-top-grid">
+  <div class="panel uploader-baby-card">
+    <div class="uploader-baby-birthday">小帽子生日/冒头时间：{{ baby_birthday_text }}</div>
+    <div class="uploader-baby-age">今日年龄：{{ today_age_text }}</div>
+  </div>
+  <div class="panel uploader-upload-card">
+    <form id="uploader-form" class="config-form uploader-form">
+      <input
+        id="uploader-input"
+        class="uploader-input"
+        type="file"
+        multiple
+        accept=".jpg,.jpeg,.png,.gif,.webp,.heic,.heif,.mov,.mp4,.m4v,.3gp,.hevc,image/*,video/*"
+      />
+      <label class="btn uploader-trigger" for="uploader-input">投喂小帽子</label>
+    </form>
+    <div class="muted" id="uploader-status"></div>
+    <div class="uploader-stats">
+      <div class="uploader-stat">总媒体数: {{ stats.total_count }}</div>
+      <div class="uploader-stat">回收站: {{ stats.trash_count }} 条（7天后自动删除）</div>
+      <div class="uploader-stat">图片: {{ stats.image_count }} 个 / {{ stats_text.image_bytes }}</div>
+      <div class="uploader-stat">视频: {{ stats.video_count }} 个 / {{ stats_text.video_bytes }}</div>
+      <div class="uploader-stat">已用: {{ stats_text.total_bytes }} · 剩余空间: {{ stats_text.disk_free_bytes }}</div>
+    </div>
+  </div>
+</section>
 
 <section class="recent">
   <h3>冒冒小展厅</h3>
@@ -49,28 +84,39 @@
       <a class="btn secondary {% if page <= 1 %}disabled-link{% endif %}" href="{{ url_for('dashboard.uploader', page=page-1 if page>1 else 1, per_page=per_page, sort_by=sort_by, sort_order=sort_order) }}">上一页</a>
       <a class="btn secondary {% if page >= total_pages %}disabled-link{% endif %}" href="{{ url_for('dashboard.uploader', page=page+1 if page<total_pages else total_pages, per_page=per_page, sort_by=sort_by, sort_order=sort_order) }}">下一页</a>
     </div>
+    <form method="get" class="pager-jump-form">
+      <input type="hidden" name="per_page" value="{{ per_page }}" />
+      <input type="hidden" name="sort_by" value="{{ sort_by }}" />
+      <input type="hidden" name="sort_order" value="{{ sort_order }}" />
+      <label class="pager-label">跳转到
+        <input class="pager-jump-input" type="number" name="page" min="1" max="{{ total_pages }}" value="{{ page }}" />
+      </label>
+      <button class="btn secondary" type="submit">跳转</button>
+    </form>
   </div>
-  <div class="recent-grid" id="uploader-grid">
-    {% for item in media_items %}
-    <a
-      class="recent-item uploader-item {% if item.media_type == 'video' %}media-video{% endif %}"
-      href="{{ item.media_url }}"
-      data-role="uploader-link"
-      data-id="{{ item.id }}"
-      data-file="{{ item.original_name }}"
-      data-storage-path="{{ item.storage_path }}"
-      data-media-type="{{ item.media_type }}"
-      data-poster-url="{{ item.poster_url or '' }}"
-    >
-      {% if item.media_type == 'image' %}
-      <img src="{{ item.media_url }}" alt="{{ item.original_name }}" loading="lazy" />
-      {% else %}
-      <video src="{{ item.media_url }}" {% if item.poster_url %}poster="{{ item.poster_url }}"{% endif %} preload="metadata" muted playsinline></video>
-      {% endif %}
-      <div class="uploader-meta">{{ item.original_name }}</div>
-    </a>
+  {% if timeline_mode %}
+  <div id="uploader-grid" class="timeline-groups">
+    {% for group in timeline_groups %}
+    <section class="timeline-group">
+      <header class="timeline-group-header">
+        <div class="timeline-day">{{ group.day_label }}</div>
+        <div class="timeline-meta">冒冒年龄：{{ group.age_text }} · {{ group.items|length }} 条</div>
+      </header>
+      <div class="recent-grid timeline-grid">
+        {% for item in group.items %}
+          {{ render_uploader_item(item) }}
+        {% endfor %}
+      </div>
+    </section>
     {% endfor %}
   </div>
+  {% else %}
+  <div class="recent-grid" id="uploader-grid">
+    {% for item in media_items %}
+      {{ render_uploader_item(item) }}
+    {% endfor %}
+  </div>
+  {% endif %}
 </section>
 
 <div class="lightbox" data-role="uploader-lightbox" aria-hidden="true">
@@ -82,7 +128,50 @@
     <div class="uploader-lightbox-stage" data-role="uploader-lightbox-stage"></div>
     <button class="lightbox-nav next" type="button" data-action="uploader-lightbox-next" aria-label="下一张">›</button>
     <div class="lightbox-meta" data-role="uploader-lightbox-meta"></div>
+    <div class="lightbox-status" data-role="uploader-lightbox-status"></div>
     <div class="lightbox-strip" data-role="uploader-lightbox-strip"></div>
   </div>
 </div>
+
+<section class="recent">
+  <button class="trash-toggle" type="button" data-action="trash-toggle" aria-expanded="false">
+    回收站（7天后自动删除）
+  </button>
+  <div class="trash-panel" id="uploader-trash-panel" hidden>
+    <div class="muted">删除媒体后会先进入回收站，你可以预览、恢复或立即彻底删除。</div>
+    <div class="trash-list" id="uploader-trash-list">
+    {% if trash_items|length == 0 %}
+    <div class="muted" id="uploader-trash-empty">回收站是空的</div>
+    {% endif %}
+    {% for item in trash_items %}
+    <div class="trash-item" data-role="trash-item" data-id="{{ item.id }}">
+      <a
+        class="trash-preview {% if item.media_type == 'video' %}media-video{% endif %}"
+        href="{{ item.media_url }}"
+        data-role="trash-link"
+        data-id="{{ item.id }}"
+        data-file="{{ item.original_name }}"
+        data-media-type="{{ item.media_type }}"
+        data-poster-url="{{ item.poster_url or '' }}"
+        data-captured-at="{{ item.captured_at or '' }}"
+        data-created-at="{{ item.created_at or '' }}"
+        data-location="{{ item.location_text or '' }}"
+      >
+        {% if item.media_type == 'image' %}
+        <img src="{{ item.media_url }}" alt="{{ item.original_name }}" loading="lazy" />
+        {% else %}
+        <video src="{{ item.media_url }}" {% if item.poster_url %}poster="{{ item.poster_url }}"{% endif %} preload="metadata" muted playsinline></video>
+        {% endif %}
+      </a>
+      <div class="trash-name">{{ item.original_name }}</div>
+      <div class="trash-time">删除时间: {{ item.deleted_at }} · 自动清理: {{ item.purge_at }}</div>
+      <div class="trash-actions">
+        <button class="btn secondary" type="button" data-action="trash-restore" data-id="{{ item.id }}">恢复</button>
+        <button class="btn" type="button" data-action="trash-delete" data-id="{{ item.id }}">彻底删除</button>
+      </div>
+    </div>
+    {% endfor %}
+    </div>
+  </div>
+</section>
 {% endblock %}
