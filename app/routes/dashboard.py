@@ -80,6 +80,27 @@ def _build_timeline_groups(items: list, *, birth_date: datetime.date) -> list:
     return groups
 
 
+def _build_timeline_month_groups(day_groups: list) -> list:
+    month_groups = []
+    by_month = {}
+    for group in day_groups:
+        day_key = group.get("day_key", "未知日期")
+        month_key = day_key[:7] if len(day_key) >= 7 and day_key != "未知日期" else "未知月份"
+        if month_key not in by_month:
+            by_month[month_key] = {
+                "month_key": month_key,
+                "month_label": month_key,
+                "day_groups": [],
+                "item_count": 0,
+                "day_count": 0,
+            }
+            month_groups.append(by_month[month_key])
+        by_month[month_key]["day_groups"].append(group)
+        by_month[month_key]["item_count"] += int(group.get("item_count", 0))
+        by_month[month_key]["day_count"] += 1
+    return month_groups
+
+
 def _detect_lan_ip() -> str:
     # Prefer the outbound interface address (works without sending traffic).
     try:
@@ -190,6 +211,7 @@ def uploader():
     today_age_text = _compute_age_text(birth_date, datetime.date.today())
     timeline_mode = result["sort_by"] == "captured"
     timeline_groups = _build_timeline_groups(result["items"], birth_date=birth_date) if timeline_mode else []
+    timeline_month_groups = _build_timeline_month_groups(timeline_groups) if timeline_mode else []
     trash_items = media_library.list_trash(limit=120)
     stats = media_library.get_storage_stats()
     total = result["total"]
@@ -208,6 +230,7 @@ def uploader():
         media_items=result["items"],
         timeline_mode=timeline_mode,
         timeline_groups=timeline_groups,
+        timeline_month_groups=timeline_month_groups,
         trash_items=trash_items,
         total=total,
         baby_birthday_text=BABY_BIRTHDAY_TEXT,

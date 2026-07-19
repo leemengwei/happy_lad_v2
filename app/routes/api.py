@@ -1,7 +1,8 @@
 import yaml
 import os
 import datetime
-from flask import Blueprint, current_app, jsonify, request, url_for
+import re
+from flask import Blueprint, current_app, jsonify, request, url_for, send_from_directory
 from werkzeug.utils import secure_filename
 from PIL import Image, ExifTags
 import cv2
@@ -19,6 +20,12 @@ IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".heic", ".heif"}
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".m4v", ".3gp", ".hevc"}
 
 EXIF_DATETIME_KEYS = {"DateTimeOriginal", "DateTimeDigitized", "DateTime"}
+EXIF_DATETIME_PRIORITY = ("DateTimeOriginal", "DateTimeDigitized", "DateTime")
+XMP_DATETIME_PATTERNS = (
+    r"<photoshop:DateCreated>([^<]+)</photoshop:DateCreated>",
+    r"<xmp:CreateDate>([^<]+)</xmp:CreateDate>",
+    r"<xmp:ModifyDate>([^<]+)</xmp:ModifyDate>",
+)
 
 
 def _get_manager():
@@ -43,20 +50,57 @@ def _parse_exif_datetime(value: str):
         return None
 
 
+def _parse_flexible_datetime(value: str):
+    if not value:
+        return None
+    raw = str(value).strip()
+    parsed = _parse_exif_datetime(raw)
+    if parsed:
+        return parsed
+    normalized = raw.replace("Z", "+00:00")
+    for sep in ("T", " "):
+        try:
+            return datetime.datetime.fromisoformat(normalized.replace("T", sep, 1)).isoformat()
+        except Exception:
+            continue
+    return None
+
+
+def _extract_xmp_datetime(img: Image.Image):
+    for key in ("xmp", "XML:com.adobe.xmp"):
+        payload = img.info.get(key)
+        if not payload:
+            continue
+        text = payload.decode("utf-8", errors="ignore") if isinstance(payload, (bytes, bytearray)) else str(payload)
+        for pattern in XMP_DATETIME_PATTERNS:
+            match = re.search(pattern, text)
+            if not match:
+                continue
+            parsed = _parse_flexible_datetime(match.group(1))
+            if parsed:
+                return parsed
+    return None
+
+
 def _extract_captured_at(abs_path: str, ext: str, media_type: str):
     if media_type != "image":
         return None
     try:
         with Image.open(abs_path) as img:
             exif = img.getexif()
-            if not exif:
-                return None
-            for tag_id, raw in exif.items():
-                tag_name = ExifTags.TAGS.get(tag_id, str(tag_id))
-                if tag_name in EXIF_DATETIME_KEYS:
-                    parsed = _parse_exif_datetime(raw)
+            exif_by_name = {}
+            if exif:
+                for tag_id, raw in exif.items():
+                    tag_name = ExifTags.TAGS.get(tag_id, str(tag_id))
+                    if tag_name in EXIF_DATETIME_KEYS:
+                        exif_by_name[tag_name] = raw
+                for key in EXIF_DATETIME_PRIORITY:
+                    parsed = _parse_exif_datetime(exif_by_name.get(key))
                     if parsed:
                         return parsed
+            xmp_parsed = _extract_xmp_datetime(img)
+            if xmp_parsed:
+                return xmp_parsed
     except Exception:
         return None
     return None
@@ -500,3 +544,18 @@ def permanently_delete_uploader_trash():
     if not result.get("deleted"):
         return jsonify({"error": "media not found"}), 404
     return jsonify({"status": "ok", "id": media_id})
+
+
+@api_bp.get("/uploader/download/<int:media_id>")
+def download_uploader_media(media_id: int):
+    media_library = current_app.config["MEDIA_LIBRARY"]
+    item = media_library.get_media_by_id(media_id)
+    if not item:
+        return jsonify({"error": "media not found"}), 404
+    uploads_dir = current_app.config["UPLOADS_DIR"]
+    return send_from_directory(
+        uploads_dir,
+        item["storage_path"],
+        as_attachment=True,
+        download_name=item["original_name"] or os.path.basename(item["storage_path"]),
+    )

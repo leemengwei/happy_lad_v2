@@ -391,6 +391,9 @@ document.addEventListener("click", async (event) => {
   if (target.matches("[data-action='uploader-lightbox-delete']")) {
     quickDeleteCurrentUploaderItem();
   }
+  if (target.matches("[data-action='uploader-lightbox-download']")) {
+    downloadCurrentUploaderItem();
+  }
 });
 
 document.addEventListener("change", (event) => {
@@ -651,6 +654,18 @@ async function quickDeleteCurrentUploaderItem() {
     uploaderLightboxState.index = uploaderLightboxState.items.length - 1;
   }
   renderUploaderLightbox();
+}
+
+function downloadCurrentUploaderItem() {
+  if (!uploaderLightboxState.open || uploaderLightboxState.items.length === 0) return;
+  const current = uploaderLightboxState.items[uploaderLightboxState.index];
+  if (!current || !current.id) return;
+  const link = document.createElement("a");
+  link.href = `/api/uploader/download/${current.id}`;
+  link.download = current.file || "media";
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
 }
 
 function createUploaderCard(data) {

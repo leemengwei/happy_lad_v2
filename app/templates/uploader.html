@@ -95,19 +95,29 @@
     </form>
   </div>
   {% if timeline_mode %}
-  <div id="uploader-grid" class="timeline-groups">
-    {% for group in timeline_groups %}
-    <section class="timeline-group">
-      <header class="timeline-group-header">
-        <div class="timeline-day">{{ group.day_label }}</div>
-        <div class="timeline-meta">冒冒年龄：{{ group.age_text }} · {{ group.items|length }} 条</div>
-      </header>
-      <div class="recent-grid timeline-grid">
-        {% for item in group.items %}
-          {{ render_uploader_item(item) }}
+  <div id="uploader-grid" class="timeline-months">
+    {% for month in timeline_month_groups %}
+    <details class="timeline-month" {% if loop.first %}open{% endif %}>
+      <summary class="timeline-month-summary">
+        <span class="timeline-month-title">{{ month.month_label }}</span>
+        <span class="timeline-month-meta">{{ month.day_count }} 天 · {{ month.item_count }} 条</span>
+      </summary>
+      <div class="timeline-groups">
+        {% for group in month.day_groups %}
+        <section class="timeline-group">
+          <header class="timeline-group-header">
+            <div class="timeline-day">{{ group.day_label }}</div>
+            <div class="timeline-meta">冒冒年龄：{{ group.age_text }} · {{ group.item_count }} 条</div>
+          </header>
+          <div class="recent-grid timeline-grid">
+            {% for item in group["items"] %}
+              {{ render_uploader_item(item) }}
+            {% endfor %}
+          </div>
+        </section>
         {% endfor %}
       </div>
-    </section>
+    </details>
     {% endfor %}
   </div>
   {% else %}
@@ -123,6 +133,7 @@
   <div class="lightbox-backdrop" data-action="uploader-lightbox-close"></div>
   <div class="lightbox-dialog" role="dialog" aria-label="宝宝媒体预览">
     <button class="lightbox-close" type="button" data-action="uploader-lightbox-close" aria-label="关闭">×</button>
+    <button class="lightbox-download" type="button" data-action="uploader-lightbox-download" aria-label="下载当前">下载当前</button>
     <button class="lightbox-delete" type="button" data-action="uploader-lightbox-delete" aria-label="快速删除">删除当前</button>
     <button class="lightbox-nav prev" type="button" data-action="uploader-lightbox-prev" aria-label="上一张">‹</button>
     <div class="uploader-lightbox-stage" data-role="uploader-lightbox-stage"></div>

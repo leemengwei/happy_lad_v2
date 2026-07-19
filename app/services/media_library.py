@@ -132,6 +132,22 @@ class MediaLibrary:
         result = self.list_media_paginated(page=1, per_page=limit, sort_by="uploaded", sort_order="desc")
         return result["items"]
 
+    def get_media_by_id(self, media_id: int) -> Dict:
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        try:
+            row = conn.execute(
+                """
+                SELECT id, original_name, storage_path, deleted_at
+                FROM media
+                WHERE id = ?
+                """,
+                (int(media_id),),
+            ).fetchone()
+            return dict(row) if row else {}
+        finally:
+            conn.close()
+
     def list_media_paginated(
         self,
         *,
