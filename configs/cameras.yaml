@@ -1,6 +1,6 @@
 cameras:
 - device: /dev/video-cam0
-  fps: 30
+  fps: 10
   height: 1080
   id: cam0
   model_config: /home/feifeichouchou/happy_lad_v2/configs/dstest1_pgie_config.txt
@@ -14,14 +14,14 @@ cameras:
   storage_dir: /home/feifeichouchou/happy_lad_v2/images/cam0
   width: 1920
 - device: /dev/video-cam1
-  fps: 30
+  fps: 10
   height: 1080
   id: cam1
   model_config: /home/feifeichouchou/happy_lad_v2/configs/dstest1_pgie_config.txt
   name: Kitchen
   recent_samples_limit: 60
   sample_sound_file: /home/feifeichouchou/happy_lad_v2/xiaomaozi.wav
-  sample_sound_volume: 0.52
+  sample_sound_volume: 0.85
   sampling:
     cooldown_hours: 24.0
     time_span_years: 5.0

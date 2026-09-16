@@ -54,6 +54,16 @@ body {
   margin-bottom: 16px;
 }
 
+.album-loading,
+.section-loading {
+  margin-top: 10px;
+  color: #4b5563;
+}
+
+.section-loading {
+  margin-bottom: 12px;
+}
+
 .album-entry-header {
   display: flex;
   justify-content: space-between;
@@ -173,6 +183,15 @@ body {
   border-radius: 8px;
   border: 1px solid #d0d4e0;
   background: #f9fafc;
+}
+
+.config-form textarea {
+  width: 100%;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid #d0d4e0;
+  background: #f9fafc;
+  font-family: inherit;
 }
 
 .config-form input:focus {
@@ -356,6 +375,7 @@ body {
   border-radius: 10px;
   background: #0f121a;
   overflow: hidden;
+  position: relative;
 }
 
 .uploader-lightbox-stage img,
@@ -523,22 +543,57 @@ body {
   width: min(92vw, 1180px);
   height: min(86vh, 840px);
   margin: 4vh auto;
-  display: grid;
-  grid-template-rows: 1fr auto auto;
-  gap: 10px;
-  padding: 14px 16px 12px;
+  padding: 0;
   background: rgba(18, 22, 34, 0.86);
   border: 1px solid rgba(255, 255, 255, 0.15);
   border-radius: 14px;
+  overflow: hidden;
   animation: lbZoomIn 0.2s ease;
 }
 
+.uploader-lightbox-toolbar {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  right: 12px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  z-index: 10;
+  pointer-events: none;
+}
+
+.uploader-lightbox-tools {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  pointer-events: auto;
+}
+
+.uploader-lightbox-main {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+}
+
+.uploader-lightbox-stage {
+  position: absolute;
+  inset: 0;
+  background: #0f121a;
+  overflow: hidden;
+  border-radius: 0;
+}
+
+.uploader-lightbox-stage > img,
+.uploader-lightbox-stage > video,
 .lightbox-image {
   width: 100%;
   height: 100%;
   object-fit: contain;
   border-radius: 10px;
   background: #0f121a;
+  display: block;
 }
 
 .lightbox-close,
@@ -551,10 +606,6 @@ body {
 }
 
 .lightbox-delete {
-  position: absolute;
-  top: 10px;
-  left: 10px;
-  border: none;
   background: rgba(195, 42, 42, 0.92);
   color: #fff;
   border-radius: 7px;
@@ -564,10 +615,6 @@ body {
 }
 
 .lightbox-download {
-  position: absolute;
-  top: 10px;
-  left: 108px;
-  border: none;
   background: rgba(16, 80, 164, 0.92);
   color: #fff;
   border-radius: 7px;
@@ -593,6 +640,8 @@ body {
   height: 68px;
   border-radius: 8px;
   font-size: 34px;
+  z-index: 3;
+  opacity: 0.95;
 }
 
 .lightbox-nav:disabled {
@@ -608,33 +657,49 @@ body {
   right: 10px;
 }
 
+.uploader-lightbox-toolbar .lightbox-close,
+.uploader-lightbox-main .lightbox-nav {
+  pointer-events: auto;
+}
+
 .lightbox-meta {
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  bottom: 118px;
+  z-index: 8;
   color: #dbe2ff;
   font-size: 0.92rem;
-  padding: 2px 2px 6px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: rgba(7, 12, 24, 0.58);
+  backdrop-filter: blur(2px);
 }
 
-.lightbox-strip {
-  display: flex;
-  gap: 8px;
-  overflow-x: auto;
-  padding-bottom: 2px;
+.danmu-layer {
+  position: absolute;
+  left: 72px;
+  right: 72px;
+  top: 56px;
+  bottom: 172px;
+  pointer-events: none;
+  overflow: hidden;
+  z-index: 6;
 }
 
-.lightbox-thumb {
-  width: 88px;
-  height: 62px;
-  object-fit: cover;
-  border-radius: 7px;
-  opacity: 0.62;
-  border: 2px solid transparent;
-  cursor: pointer;
-  flex: 0 0 auto;
+.danmu-item {
+  position: absolute;
+  right: -10%;
+  white-space: nowrap;
+  font-size: 1rem;
+  font-weight: 700;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.7);
+  animation: danmuMove 19.5s linear forwards;
 }
 
-.lightbox-thumb.active {
-  opacity: 1;
-  border-color: #7ca5ff;
+@keyframes danmuMove {
+  from { transform: translateX(0); }
+  to { transform: translateX(-120vw); }
 }
 
 @keyframes lbFadeIn {
@@ -676,6 +741,11 @@ body {
 }
 
 .lightbox-status {
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  bottom: 76px;
+  z-index: 8;
   color: #c5d2ff;
   font-size: 0.84rem;
   background: rgba(8, 13, 28, 0.5);
@@ -747,7 +817,199 @@ body {
   gap: 8px;
 }
 
+.uploader-interaction {
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  bottom: 12px;
+  z-index: 9;
+  border-top: 1px solid rgba(160, 177, 238, 0.25);
+  padding: 8px;
+  border-radius: 8px;
+  background: rgba(7, 12, 24, 0.42);
+  display: grid;
+  gap: 8px;
+}
+
+.uploader-interaction > summary {
+  cursor: pointer;
+  color: #dbe2ff;
+  font-size: 0.9rem;
+  user-select: none;
+}
+
+.uploader-interaction-list {
+  max-height: 150px;
+  overflow: auto;
+  display: grid;
+  gap: 6px;
+}
+
+.uploader-danmu-item {
+  border: 1px solid rgba(168, 186, 249, 0.25);
+  background: rgba(9, 14, 28, 0.4);
+  border-radius: 8px;
+  padding: 6px 8px;
+  color: #d5ddff;
+  font-size: 0.84rem;
+}
+
+.uploader-interaction-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.uploader-interaction-actions input {
+  min-width: 180px;
+  flex: 1;
+  border: 1px solid #d0d4e0;
+  border-radius: 6px;
+  background: #fff;
+  padding: 6px 8px;
+}
+
+.feedback-list {
+  display: grid;
+  gap: 10px;
+}
+
+.feedback-board {
+  display: grid;
+  gap: 14px;
+}
+
+.feedback-board-header h1 {
+  margin-bottom: 4px;
+}
+
+.feedback-board-header p {
+  margin: 0;
+}
+
+.feedback-board-grid {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: minmax(260px, 1fr) minmax(320px, 1fr);
+}
+
+.feedback-block {
+  border: 1px solid #dce6f2;
+  border-radius: 14px;
+  padding: 14px;
+  background:
+    radial-gradient(circle at 14% 12%, rgba(255, 255, 255, 0.92) 0%, rgba(255, 255, 255, 0) 38%),
+    linear-gradient(180deg, #f7fbff 0%, #f2f8ff 100%);
+  box-shadow: 0 8px 20px rgba(35, 82, 130, 0.1);
+}
+
+.feedback-block h3 {
+  margin: 0 0 10px;
+  color: #1f3f64;
+  letter-spacing: 0.02em;
+}
+
+.feedback-block .muted {
+  color: #6383a7;
+}
+
+.feedback-block-compose {
+  grid-column: 1 / -1;
+}
+
+.feedback-block-title {
+  margin-bottom: 10px;
+}
+
+.feedback-status-row {
+  margin-top: 8px;
+}
+
+.feedback-item {
+  border: 1px solid #cfdeee;
+  background:
+    repeating-linear-gradient(
+      -1deg,
+      rgba(255, 255, 255, 0.95),
+      rgba(255, 255, 255, 0.95) 32px,
+      rgba(247, 251, 255, 0.95) 32px,
+      rgba(247, 251, 255, 0.95) 64px
+    );
+  border-radius: 12px;
+  padding: 12px 14px;
+  box-shadow: 0 6px 16px rgba(31, 84, 139, 0.09);
+}
+
+.feedback-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.8rem;
+  color: #31587f;
+  margin-bottom: 6px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: #edf5ff;
+  border: 1px solid #c8dcf3;
+}
+
+.feedback-content {
+  font-size: 0.95rem;
+  color: #173351;
+  white-space: pre-wrap;
+}
+
+.feedback-upgrade-log {
+  margin-top: 8px;
+  font-size: 0.84rem;
+  color: #31587f;
+  background: #eef6ff;
+  border: 1px solid #c8def4;
+  border-radius: 8px;
+  padding: 6px 8px;
+}
+
+.feedback-item-upgraded {
+  border-color: #9ec4ea;
+}
+
+.feedback-actions {
+  margin-top: 8px;
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.feedback-terminal-panel {
+  margin-top: 14px;
+}
+
+.feedback-terminal-panel summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.feedback-terminal {
+  margin: 8px 0 0;
+  min-height: 150px;
+  max-height: 360px;
+  overflow: auto;
+  background: #0b1220;
+  color: #cde0ff;
+  border-radius: 10px;
+  border: 1px solid #1f335b;
+  padding: 10px 12px;
+  font-size: 0.82rem;
+  line-height: 1.45;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  white-space: pre-wrap;
+}
+
 @media (max-width: 960px) {
+  .feedback-board-grid {
+    grid-template-columns: 1fr;
+  }
+
   .uploader-top-grid {
     grid-template-columns: 1fr;
   }
@@ -769,5 +1031,33 @@ body {
   .album-entry-header {
     flex-direction: column;
     align-items: flex-start;
+  }
+
+  .lightbox-dialog {
+    width: 96vw;
+    height: 92vh;
+    margin: 2vh auto;
+    padding: 0;
+  }
+
+  .uploader-lightbox-main {
+    inset: 0;
+  }
+
+  .uploader-lightbox-stage {
+    inset: 0;
+  }
+
+  .lightbox-nav {
+    width: 42px;
+    height: 56px;
+    font-size: 30px;
+  }
+
+  .danmu-layer {
+    left: 8px;
+    right: 8px;
+    top: 52px;
+    bottom: 210px;
   }
 }

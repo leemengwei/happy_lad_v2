@@ -5,12 +5,15 @@ import socket
 import urllib.parse
 import urllib.request
 import datetime
+import threading
 from flask import Blueprint, current_app, render_template, Response, abort, send_from_directory, url_for, request
 from PIL import Image, ImageDraw
 
 
 dashboard_bp = Blueprint("dashboard", __name__)
 BABY_BIRTHDAY_TEXT = "2026-06-29"
+_qr_cache_lock = threading.Lock()
+_qr_cache_body = None
 
 
 def _get_manager():
@@ -128,14 +131,27 @@ def _detect_lan_ip() -> str:
 
 @dashboard_bp.route("/")
 def dashboard():
-    manager = _get_manager()
-    status_list = manager.list_status()
-    media_items = current_app.config["MEDIA_LIBRARY"].list_media(limit=12)
-    return render_template("dashboard.html", cameras=status_list, media_items=media_items)
+    return render_template(
+        "dashboard.html",
+        uploader_storage_ready=bool(current_app.config.get("UPLOADER_STORAGE_READY")),
+        uploader_storage_error=current_app.config.get("UPLOADER_STORAGE_ERROR", ""),
+    )
+
+
+@dashboard_bp.route("/feedback")
+def feedback_board():
+    media_library = current_app.config.get("MEDIA_LIBRARY")
+    notes = media_library.list_feedback_notes(limit=200) if media_library is not None else []
+    return render_template("feedback.html", notes=notes)
 
 
 @dashboard_bp.route("/qr/home.png")
 def home_qr_png():
+    global _qr_cache_body
+    with _qr_cache_lock:
+        if _qr_cache_body is not None:
+            return Response(_qr_cache_body, mimetype="image/png")
+
     host = request.host or ""
     if ":" in host and host.count(":") == 1:
         _host_name, host_port = host.rsplit(":", 1)
@@ -153,6 +169,8 @@ def home_qr_png():
         with urllib.request.urlopen(qr_url, timeout=5) as response:
             body = response.read()
             if body:
+                with _qr_cache_lock:
+                    _qr_cache_body = body
                 return Response(body, mimetype="image/png")
     except Exception:
         pass
@@ -164,7 +182,10 @@ def home_qr_png():
     draw.text((20, 108), "QR Unavailable", fill=(80, 80, 80))
     buf = io.BytesIO()
     image.save(buf, format="PNG")
-    return Response(buf.getvalue(), mimetype="image/png")
+    fallback_body = buf.getvalue()
+    with _qr_cache_lock:
+        _qr_cache_body = fallback_body
+    return Response(fallback_body, mimetype="image/png")
 
 
 @dashboard_bp.route("/diagnostics")
@@ -188,6 +209,13 @@ def diagnostics():
 
 @dashboard_bp.route("/uploader")
 def uploader():
+    if not current_app.config.get("UPLOADER_STORAGE_READY"):
+        return render_template(
+            "uploader.html",
+            storage_unavailable=True,
+            storage_error=current_app.config.get("UPLOADER_STORAGE_ERROR", "相册存储不可用。"),
+        )
+
     media_library = current_app.config["MEDIA_LIBRARY"]
     try:
         page = int(request.args.get("page", 1))
@@ -303,4 +331,6 @@ def sample_media(camera_id: str, filename: str):
 
 @dashboard_bp.route("/uploads/<path:filename>")
 def uploaded_media(filename: str):
+    if not current_app.config.get("UPLOADER_STORAGE_READY"):
+        abort(503, description=current_app.config.get("UPLOADER_STORAGE_ERROR", "相册存储不可用。"))
     return send_from_directory(current_app.config["UPLOADS_DIR"], filename)

@@ -16,54 +16,31 @@
       <div class="muted">主页二维码</div>
     </div>
   </header>
-  {% if media_items %}
-  <div class="album-thumbs">
-    {% for item in media_items %}
-    <div class="album-thumb {% if item.media_type == 'video' %}media-video{% endif %}" aria-hidden="true">
-      {% if item.media_type == 'image' %}
-      <img src="{{ item.media_url }}" alt="{{ item.original_name }}" loading="lazy" />
-      {% else %}
-      <video src="{{ item.media_url }}" {% if item.poster_url %}poster="{{ item.poster_url }}"{% endif %} preload="metadata" muted playsinline></video>
-      {% endif %}
-    </div>
-    {% endfor %}
-  </div>
+  <div class="album-loading" data-role="home-media-loading">相册加载中...</div>
+  <div class="album-thumbs" data-role="home-media-grid" style="display: none;"></div>
+  <div class="muted" data-role="home-media-empty" style="display: none;">暂时还没有相册内容</div>
+  <div class="muted" data-role="home-media-error" style="display: none;">相册加载失败，请稍后重试</div>
+  {% if not uploader_storage_ready %}
+  <div class="muted" style="color: #b42318; margin-top: 10px;">{{ uploader_storage_error or "相册存储不可用。" }}</div>
   {% endif %}
+  <div
+    data-role="home-media-config"
+    data-fallback-image="{{ url_for('static', filename='img/sleepy-pig.svg') }}"
+    style="display: none;"
+  ></div>
   <div class="actions">
     <a class="btn" href="{{ url_for('dashboard.uploader') }}">去小帽子相册</a>
   </div>
 </section>
-<div class="grid">
-  {% for camera in cameras %}
-  <section class="card" data-camera-id="{{ camera.camera_id }}">
-    <header>
-      <h2>{{ camera.camera_name }}</h2>
-      <div class="muted">{{ camera.device }}</div>
-    </header>
-    <div class="preview">
-      <img
-        src="{{ url_for('static', filename='img/sleepy-pig.svg') if camera.snoozing else url_for('dashboard.camera_stream', camera_id=camera.camera_id) }}"
-        alt="{{ '小猪睡觉中' if camera.snoozing else camera.camera_name }}"
-        data-role="preview-image"
-        data-stream-src="{{ url_for('dashboard.camera_stream', camera_id=camera.camera_id) }}"
-        data-snooze-src="{{ url_for('static', filename='img/sleepy-pig.svg') }}"
-      />
-    </div>
-    <div class="meta">
-      <div data-role="last-frame">最近帧: {{ camera.last_frame_time or '暂无' }}</div>
-      <div data-role="running-status">状态: {{ '运行中' if camera.running else '停止' }}</div>
-      <div data-role="snooze-status">
-        瞌睡: {{ '剩余 ' ~ (camera.snooze_remaining_seconds // 60) ~ ' 分钟' if camera.snoozing else '关闭' }}
-      </div>
-      <div class="muted" data-role="snapshot-status"></div>
-    </div>
-    <div class="actions">
-      <button class="btn" data-action="snapshot" data-id="{{ camera.camera_id }}">强制抓拍</button>
-      <button class="btn secondary" data-action="snooze" data-id="{{ camera.camera_id }}">瞌睡 +10 分钟</button>
-      <button class="btn secondary" data-action="cancel-snooze" data-id="{{ camera.camera_id }}">取消瞌睡</button>
-      <a class="btn secondary" href="{{ url_for('dashboard.camera_detail', camera_id=camera.camera_id) }}">详情</a>
-    </div>
-  </section>
-  {% endfor %}
-</div>
+<div
+  data-role="home-camera-config"
+  data-stream-prefix="{{ url_for('dashboard.camera_stream', camera_id='__camera_id__') }}"
+  data-detail-prefix="{{ url_for('dashboard.camera_detail', camera_id='__camera_id__') }}"
+  data-snooze-image="{{ url_for('static', filename='img/sleepy-pig.svg') }}"
+  style="display: none;"
+></div>
+<div class="card section-loading" data-role="home-camera-loading">摄像头状态加载中...</div>
+<div class="muted" data-role="home-camera-error" style="display: none;">摄像头信息加载失败，请稍后重试</div>
+<div class="muted" data-role="home-camera-empty" style="display: none;">暂无可用摄像头</div>
+<div class="grid" data-role="home-camera-grid" style="display: none;"></div>
 {% endblock %}

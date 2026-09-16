@@ -1,0 +1,92 @@
+{% extends 'layout.html' %}
+{% block content %}
+<a class="page-back" href="{{ url_for('dashboard.dashboard') }}">← 返回快乐家园</a>
+<section class="feedback-board">
+  {% set pending_notes = notes | rejectattr('auto_upgraded_at') | list %}
+  {% set upgraded_notes = notes | selectattr('auto_upgraded_at') | list %}
+  <header class="feedback-board-header">
+    <h1>意见板</h1>
+    <p class="muted">像小黑板一样分块记录，先写建议，再按状态处理。</p>
+  </header>
+  <section class="feedback-board-grid" id="feedback-board-grid">
+    <article class="feedback-block feedback-block-compose">
+      <h3>写新意见</h3>
+      <form id="feedback-form" class="config-form">
+        <label>身份
+          <select id="feedback-nickname">
+            <option value="冒冒自己">冒冒自己</option>
+            <option value="冒爸">冒爸</option>
+            <option value="冒妈">冒妈</option>
+            <option value="冒爷">冒爷</option>
+            <option value="冒奶">冒奶</option>
+            <option value="冒姥">冒姥</option>
+            <option value="冒姥爷">冒姥爷</option>
+            <option value="其他">其他</option>
+          </select>
+        </label>
+        <label>建议内容
+          <textarea id="feedback-content" rows="5" maxlength="1000" placeholder="写下你的建议、吐槽或想要的新功能"></textarea>
+        </label>
+        <div class="actions">
+          <button class="btn" type="submit">提交意见</button>
+          <button class="btn secondary" type="button" data-action="feedback-auto-upgrade-all">升级全部待处理</button>
+          <button class="btn secondary" type="button" data-action="service-restart">重启服务</button>
+        </div>
+        <div class="feedback-status-row">
+          <span class="muted" id="feedback-status"></span>
+        </div>
+        <section class="panel feedback-terminal-panel" id="feedback-terminal-panel" style="display: none;">
+          <details id="feedback-terminal-details">
+            <summary>自动升级终端日志（点击展开）</summary>
+            <pre class="feedback-terminal" id="feedback-auto-terminal"></pre>
+          </details>
+        </section>
+      </form>
+    </article>
+
+    <article class="feedback-block feedback-block-pending">
+      <div class="feedback-block-title">
+        <h3>待处理小黑板</h3>
+      </div>
+      <div class="feedback-list" id="feedback-list">
+        {% for item in pending_notes %}
+        <article class="feedback-item" data-role="feedback-item" data-id="{{ item.id }}">
+          <div class="feedback-meta">{{ item.nickname or '家人' }} · {{ item.created_at }}</div>
+          <div class="feedback-content" data-role="feedback-content">{{ item.content }}</div>
+          <div class="feedback-actions">
+            <button class="btn secondary" type="button" data-action="feedback-auto-upgrade" data-id="{{ item.id }}">自动升级</button>
+            <button class="btn" type="button" data-action="feedback-delete" data-id="{{ item.id }}">删除</button>
+          </div>
+        </article>
+        {% endfor %}
+        {% if pending_notes|length == 0 %}
+        <div class="muted">当前没有待处理意见。</div>
+        {% endif %}
+      </div>
+    </article>
+
+    <article class="feedback-block feedback-block-upgraded">
+      <div class="feedback-block-title">
+        <h3>已升级小黑板</h3>
+      </div>
+      <div class="feedback-list">
+        {% for item in upgraded_notes %}
+        <article class="feedback-item feedback-item-upgraded" data-role="feedback-item" data-id="{{ item.id }}">
+          <div class="feedback-meta">{{ item.nickname or '家人' }} · {{ item.created_at }}</div>
+          <div class="feedback-content" data-role="feedback-content">{{ item.content }}</div>
+          <div class="feedback-actions">
+            <button class="btn" type="button" data-action="feedback-delete" data-id="{{ item.id }}">删除</button>
+          </div>
+          <div class="feedback-upgrade-log">
+            已修改：{{ item.auto_upgraded_at }} · 方案：{{ item.auto_upgrade_summary or '详见代码改动' }}
+          </div>
+        </article>
+        {% endfor %}
+        {% if upgraded_notes|length == 0 %}
+        <div class="muted">还没有自动升级记录。</div>
+        {% endif %}
+      </div>
+    </article>
+  </section>
+</section>
+{% endblock %}

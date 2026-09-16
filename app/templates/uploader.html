@@ -24,6 +24,11 @@
 {%- endmacro %}
 <a class="page-back" href="{{ url_for('dashboard.dashboard') }}">← 返回快乐家园</a>
 <h1>小帽子媒体上传</h1>
+{% if storage_unavailable %}
+<section class="card">
+  <div class="muted" style="color: #b42318;">{{ storage_error or "相册存储不可用。" }}</div>
+</section>
+{% else %}
 <section class="uploader-top-grid">
   <div class="panel uploader-baby-card">
     <div class="uploader-baby-birthday">小帽子生日/冒头时间：{{ baby_birthday_text }}</div>
@@ -81,8 +86,10 @@
     </form>
     <div class="pager-text">第 {{ page }} / {{ total_pages }} 页 · 共 {{ total }} 条</div>
     <div class="actions">
+      <a class="btn secondary {% if page <= 1 %}disabled-link{% endif %}" href="{{ url_for('dashboard.uploader', page=1, per_page=per_page, sort_by=sort_by, sort_order=sort_order) }}">首页</a>
       <a class="btn secondary {% if page <= 1 %}disabled-link{% endif %}" href="{{ url_for('dashboard.uploader', page=page-1 if page>1 else 1, per_page=per_page, sort_by=sort_by, sort_order=sort_order) }}">上一页</a>
       <a class="btn secondary {% if page >= total_pages %}disabled-link{% endif %}" href="{{ url_for('dashboard.uploader', page=page+1 if page<total_pages else total_pages, per_page=per_page, sort_by=sort_by, sort_order=sort_order) }}">下一页</a>
+      <a class="btn secondary {% if page >= total_pages %}disabled-link{% endif %}" href="{{ url_for('dashboard.uploader', page=total_pages, per_page=per_page, sort_by=sort_by, sort_order=sort_order) }}">末页</a>
     </div>
     <form method="get" class="pager-jump-form">
       <input type="hidden" name="per_page" value="{{ per_page }}" />
@@ -132,15 +139,29 @@
 <div class="lightbox" data-role="uploader-lightbox" aria-hidden="true">
   <div class="lightbox-backdrop" data-action="uploader-lightbox-close"></div>
   <div class="lightbox-dialog" role="dialog" aria-label="宝宝媒体预览">
-    <button class="lightbox-close" type="button" data-action="uploader-lightbox-close" aria-label="关闭">×</button>
-    <button class="lightbox-download" type="button" data-action="uploader-lightbox-download" aria-label="下载当前">下载当前</button>
-    <button class="lightbox-delete" type="button" data-action="uploader-lightbox-delete" aria-label="快速删除">删除当前</button>
-    <button class="lightbox-nav prev" type="button" data-action="uploader-lightbox-prev" aria-label="上一张">‹</button>
-    <div class="uploader-lightbox-stage" data-role="uploader-lightbox-stage"></div>
-    <button class="lightbox-nav next" type="button" data-action="uploader-lightbox-next" aria-label="下一张">›</button>
+    <div class="uploader-lightbox-toolbar">
+      <div class="uploader-lightbox-tools">
+        <button class="lightbox-delete" type="button" data-action="uploader-lightbox-delete" aria-label="快速删除">删除当前</button>
+        <button class="lightbox-download" type="button" data-action="uploader-lightbox-download" aria-label="下载当前">下载当前</button>
+      </div>
+      <button class="lightbox-close" type="button" data-action="uploader-lightbox-close" aria-label="关闭">×</button>
+    </div>
+    <div class="uploader-lightbox-main">
+      <button class="lightbox-nav prev" type="button" data-action="uploader-lightbox-prev" aria-label="上一张">‹</button>
+      <div class="uploader-lightbox-stage" data-role="uploader-lightbox-stage"></div>
+      <button class="lightbox-nav next" type="button" data-action="uploader-lightbox-next" aria-label="下一张">›</button>
+    </div>
     <div class="lightbox-meta" data-role="uploader-lightbox-meta"></div>
     <div class="lightbox-status" data-role="uploader-lightbox-status"></div>
-    <div class="lightbox-strip" data-role="uploader-lightbox-strip"></div>
+    <div class="danmu-layer" data-role="uploader-danmu-layer"></div>
+    <details class="uploader-interaction" data-role="uploader-danmu-details">
+      <summary>弹幕（默认折叠）</summary>
+      <div class="uploader-interaction-list" data-role="uploader-danmu-list"></div>
+      <div class="uploader-interaction-actions">
+        <input type="text" maxlength="80" placeholder="弹幕内容..." data-role="uploader-danmu-input" />
+        <button class="btn" type="button" data-action="uploader-send-danmu">发弹幕</button>
+      </div>
+    </details>
   </div>
 </div>
 
@@ -185,4 +206,13 @@
     </div>
   </div>
 </section>
+<section class="recent">
+  <div class="actions">
+    <a class="btn secondary {% if page <= 1 %}disabled-link{% endif %}" href="{{ url_for('dashboard.uploader', page=1, per_page=per_page, sort_by=sort_by, sort_order=sort_order) }}">首页</a>
+    <a class="btn secondary {% if page <= 1 %}disabled-link{% endif %}" href="{{ url_for('dashboard.uploader', page=page-1 if page>1 else 1, per_page=per_page, sort_by=sort_by, sort_order=sort_order) }}">上一页</a>
+    <a class="btn secondary {% if page >= total_pages %}disabled-link{% endif %}" href="{{ url_for('dashboard.uploader', page=page+1 if page<total_pages else total_pages, per_page=per_page, sort_by=sort_by, sort_order=sort_order) }}">下一页</a>
+    <a class="btn secondary {% if page >= total_pages %}disabled-link{% endif %}" href="{{ url_for('dashboard.uploader', page=total_pages, per_page=per_page, sort_by=sort_by, sort_order=sort_order) }}">末页</a>
+  </div>
+</section>
+{% endif %}
 {% endblock %}

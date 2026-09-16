@@ -53,11 +53,4 @@ class SamplingPolicy:
             state.last_sample_time = now
             return True
 
-        logger.debug(
-            "Skip snapshot (chance=%.4f, threshold=%.4f, person_count=%d)",
-            lottery,
-            not_sample_chance,
-            person_count,
-        )
-
         return False

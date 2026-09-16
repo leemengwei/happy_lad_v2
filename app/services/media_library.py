@@ -3,7 +3,7 @@ import os
 import shutil
 import sqlite3
 import uuid
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 
 class MediaLibrary:
@@ -42,6 +42,43 @@ class MediaLibrary:
                 )
                 """
             )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS media_comments (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    media_id INTEGER NOT NULL,
+                    content TEXT NOT NULL,
+                    nickname TEXT,
+                    created_at TEXT NOT NULL
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS media_danmu (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    media_id INTEGER NOT NULL,
+                    content TEXT NOT NULL,
+                    nickname TEXT,
+                    at_second REAL,
+                    color TEXT,
+                    created_at TEXT NOT NULL
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS feedback_notes (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    content TEXT NOT NULL,
+                    nickname TEXT,
+                    auto_upgraded_at TEXT,
+                    auto_upgrade_summary TEXT,
+                    auto_upgrade_plan TEXT,
+                    created_at TEXT NOT NULL
+                )
+                """
+            )
             columns = [row[1] for row in conn.execute("PRAGMA table_info(media)").fetchall()]
             if "captured_at" not in columns:
                 conn.execute("ALTER TABLE media ADD COLUMN captured_at TEXT")
@@ -59,7 +96,27 @@ class MediaLibrary:
                 conn.execute("ALTER TABLE media ADD COLUMN deleted_at TEXT")
             if "purge_at" not in columns:
                 conn.execute("ALTER TABLE media ADD COLUMN purge_at TEXT")
+            feedback_columns = [row[1] for row in conn.execute("PRAGMA table_info(feedback_notes)").fetchall()]
+            if "auto_upgraded_at" not in feedback_columns:
+                conn.execute("ALTER TABLE feedback_notes ADD COLUMN auto_upgraded_at TEXT")
+            if "auto_upgrade_summary" not in feedback_columns:
+                conn.execute("ALTER TABLE feedback_notes ADD COLUMN auto_upgrade_summary TEXT")
+            if "auto_upgrade_plan" not in feedback_columns:
+                conn.execute("ALTER TABLE feedback_notes ADD COLUMN auto_upgrade_plan TEXT")
             conn.commit()
+        finally:
+            conn.close()
+
+    def update_media_captured_at(self, media_id: int, captured_at: str) -> Dict:
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        try:
+            row = conn.execute("SELECT id FROM media WHERE id = ?", (int(media_id),)).fetchone()
+            if row is None:
+                return {"updated": False, "reason": "not_found"}
+            conn.execute("UPDATE media SET captured_at = ? WHERE id = ?", (captured_at, int(media_id)))
+            conn.commit()
+            return {"updated": True, "id": int(media_id), "captured_at": captured_at}
         finally:
             conn.close()
 
@@ -344,6 +401,231 @@ class MediaLibrary:
                 (poster_path, poster_url, int(media_id)),
             )
             conn.commit()
+        finally:
+            conn.close()
+
+    def add_media_comment(self, media_id: int, content: str, nickname: str = None) -> int:
+        now = datetime.datetime.now().isoformat()
+        conn = sqlite3.connect(self.db_path)
+        try:
+            cursor = conn.execute(
+                "INSERT INTO media_comments (media_id, content, nickname, created_at) VALUES (?, ?, ?, ?)",
+                (int(media_id), str(content).strip(), (nickname or "").strip() or None, now),
+            )
+            conn.commit()
+            return int(cursor.lastrowid)
+        finally:
+            conn.close()
+
+    def list_media_comments(self, media_id: int, limit: int = 120) -> List[Dict]:
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        try:
+            rows = conn.execute(
+                """
+                SELECT id, media_id, content, nickname, created_at
+                FROM media_comments
+                WHERE media_id = ?
+                ORDER BY id DESC
+                LIMIT ?
+                """,
+                (int(media_id), max(1, int(limit))),
+            ).fetchall()
+            return [dict(row) for row in rows]
+        finally:
+            conn.close()
+
+    def add_media_danmu(
+        self,
+        media_id: int,
+        content: str,
+        nickname: str = None,
+        at_second: float = None,
+        color: str = None,
+    ) -> int:
+        now = datetime.datetime.now().isoformat()
+        conn = sqlite3.connect(self.db_path)
+        try:
+            cursor = conn.execute(
+                """
+                INSERT INTO media_danmu (media_id, content, nickname, at_second, color, created_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    int(media_id),
+                    str(content).strip(),
+                    (nickname or "").strip() or None,
+                    float(at_second) if at_second is not None else None,
+                    (color or "").strip() or None,
+                    now,
+                ),
+            )
+            conn.commit()
+            return int(cursor.lastrowid)
+        finally:
+            conn.close()
+
+    def list_media_danmu(self, media_id: int, limit: int = 240) -> List[Dict]:
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        try:
+            rows = conn.execute(
+                """
+                SELECT id, media_id, content, nickname, at_second, color, created_at
+                FROM media_danmu
+                WHERE media_id = ?
+                ORDER BY id ASC
+                LIMIT ?
+                """,
+                (int(media_id), max(1, int(limit))),
+            ).fetchall()
+            return [dict(row) for row in rows]
+        finally:
+            conn.close()
+
+    def add_feedback_note(self, content: str, nickname: str = None) -> int:
+        now = datetime.datetime.now().isoformat()
+        conn = sqlite3.connect(self.db_path)
+        try:
+            cursor = conn.execute(
+                """
+                INSERT INTO feedback_notes (
+                    content, nickname, auto_upgraded_at, auto_upgrade_summary, auto_upgrade_plan, created_at
+                ) VALUES (?, ?, NULL, NULL, NULL, ?)
+                """,
+                (str(content).strip(), (nickname or "").strip() or None, now),
+            )
+            conn.commit()
+            return int(cursor.lastrowid)
+        finally:
+            conn.close()
+
+    def list_feedback_notes(self, limit: int = 200) -> List[Dict]:
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        try:
+            rows = conn.execute(
+                """
+                SELECT id, content, nickname, auto_upgraded_at, auto_upgrade_summary, auto_upgrade_plan, created_at
+                FROM feedback_notes
+                ORDER BY id DESC
+                LIMIT ?
+                """,
+                (max(1, int(limit)),),
+            ).fetchall()
+            return [dict(row) for row in rows]
+        finally:
+            conn.close()
+
+    def list_unupgraded_feedback_notes(self, limit: int = 200) -> List[Dict]:
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        try:
+            rows = conn.execute(
+                """
+                SELECT id, content, nickname, created_at
+                FROM feedback_notes
+                WHERE auto_upgraded_at IS NULL
+                ORDER BY id ASC
+                LIMIT ?
+                """,
+                (max(1, int(limit)),),
+            ).fetchall()
+            return [dict(row) for row in rows]
+        finally:
+            conn.close()
+
+    def get_feedback_note_by_id(self, note_id: int) -> Optional[Dict]:
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        try:
+            row = conn.execute(
+                """
+                SELECT id, content, nickname, auto_upgraded_at, auto_upgrade_summary, auto_upgrade_plan, created_at
+                FROM feedback_notes
+                WHERE id = ?
+                LIMIT 1
+                """,
+                (int(note_id),),
+            ).fetchone()
+            return dict(row) if row else None
+        finally:
+            conn.close()
+
+    def list_unupgraded_feedback_notes_by_ids(self, note_ids: List[int], limit: int = 200) -> List[Dict]:
+        clean_ids = [int(item) for item in (note_ids or []) if item is not None]
+        if not clean_ids:
+            return []
+        placeholders = ",".join(["?"] * len(clean_ids))
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        try:
+            rows = conn.execute(
+                f"""
+                SELECT id, content, nickname, created_at
+                FROM feedback_notes
+                WHERE auto_upgraded_at IS NULL AND id IN ({placeholders})
+                ORDER BY id ASC
+                LIMIT ?
+                """,
+                (*clean_ids, max(1, int(limit))),
+            ).fetchall()
+            return [dict(row) for row in rows]
+        finally:
+            conn.close()
+
+    def delete_feedback_note(self, note_id: int) -> bool:
+        conn = sqlite3.connect(self.db_path)
+        try:
+            cursor = conn.execute(
+                "DELETE FROM feedback_notes WHERE id = ?",
+                (int(note_id),),
+            )
+            conn.commit()
+            return bool(cursor.rowcount)
+        finally:
+            conn.close()
+
+    def mark_feedback_notes_upgraded(self, note_ids: List[int], summary: str, plan: str, upgraded_at: str = None) -> int:
+        clean_ids = [int(item) for item in (note_ids or []) if item is not None]
+        if not clean_ids:
+            return 0
+        upgraded_time = upgraded_at or datetime.datetime.now().isoformat()
+        summary_text = (summary or "").strip() or "已自动升级，详情见代码变更。"
+        plan_text = (plan or "").strip() or summary_text
+        placeholders = ",".join(["?"] * len(clean_ids))
+        params = [upgraded_time, summary_text[:500], plan_text[:2000], *clean_ids]
+        conn = sqlite3.connect(self.db_path)
+        try:
+            cursor = conn.execute(
+                f"""
+                UPDATE feedback_notes
+                SET auto_upgraded_at = ?, auto_upgrade_summary = ?, auto_upgrade_plan = ?
+                WHERE id IN ({placeholders})
+                """,
+                params,
+            )
+            conn.commit()
+            return int(cursor.rowcount or 0)
+        finally:
+            conn.close()
+
+    def mark_feedback_note_upgraded(self, note_id: int, summary: str, plan: str, upgraded_at: str = None) -> bool:
+        upgraded_time = upgraded_at or datetime.datetime.now().isoformat()
+        summary_text = (summary or "").strip() or "已自动升级，详情见代码变更。"
+        plan_text = (plan or "").strip() or summary_text
+        conn = sqlite3.connect(self.db_path)
+        try:
+            cursor = conn.execute(
+                """
+                UPDATE feedback_notes
+                SET auto_upgraded_at = ?, auto_upgrade_summary = ?, auto_upgrade_plan = ?
+                WHERE id = ?
+                """,
+                (upgraded_time, summary_text[:500], plan_text[:2000], int(note_id)),
+            )
+            conn.commit()
+            return bool(cursor.rowcount)
         finally:
             conn.close()
 

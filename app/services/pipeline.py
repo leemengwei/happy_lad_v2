@@ -72,15 +72,18 @@ class DeepStreamPipeline:
         self._running = False
         self._snooze_until: Optional[datetime.datetime] = None
         self._sound_warned = False
+        self._preview_interval = 2.0
+        self._next_preview_at = 0.0
+        self._probe_counter = 0
 
     def _build_pipeline(self) -> Gst.Pipeline:
         pipeline = Gst.Pipeline()
 
         source = Gst.ElementFactory.make("v4l2src", f"source-{self.camera_id}")
         caps_filter = Gst.ElementFactory.make("capsfilter", f"caps-{self.camera_id}")
-        jpegdec = Gst.ElementFactory.make("jpegdec", f"jpegdec-{self.camera_id}")
-        vidconv = Gst.ElementFactory.make("videoconvert", f"videoconvert-{self.camera_id}")
-        nvvidconv = Gst.ElementFactory.make("nvvideoconvert", f"nvvidconv-{self.camera_id}")
+        decoder = Gst.ElementFactory.make("nvjpegdec", f"decoder-{self.camera_id}")
+        decodeconv = Gst.ElementFactory.make("nvvideoconvert", f"decodeconv-{self.camera_id}")
+        decode_caps = Gst.ElementFactory.make("capsfilter", f"decode-caps-{self.camera_id}")
         streammux = Gst.ElementFactory.make("nvstreammux", f"streammux-{self.camera_id}")
         pgie = Gst.ElementFactory.make("nvinfer", f"primary-{self.camera_id}")
         nvvidconv_osd = Gst.ElementFactory.make("nvvideoconvert", f"osd-convert-{self.camera_id}")
@@ -91,9 +94,9 @@ class DeepStreamPipeline:
         if not all([
             source,
             caps_filter,
-            jpegdec,
-            vidconv,
-            nvvidconv,
+            decoder,
+            decodeconv,
+            decode_caps,
             streammux,
             pgie,
             nvvidconv_osd,
@@ -104,24 +107,30 @@ class DeepStreamPipeline:
             raise RuntimeError("Failed to create GStreamer elements")
 
         source.set_property("device", self.device)
+        source.set_property("io-mode", 2)
         caps = Gst.Caps.from_string(
-            f"image/jpeg, width={self.width}, height={self.height}, framerate={self.fps}/1"
+            f"image/jpeg, width={self.width}, height={self.height}, framerate=30/1"
         )
         caps_filter.set_property("caps", caps)
+        decoder.set_property("mjpegdecode", True)
+        decode_caps.set_property(
+            "caps", Gst.Caps.from_string("video/x-raw(memory:NVMM),format=NV12")
+        )
         caps_filter2.set_property("caps", Gst.Caps.from_string("video/x-raw(memory:NVMM),format=RGBA"))
         fakesink.set_property("sync", False)
 
         streammux.set_property("width", self.width)
         streammux.set_property("height", self.height)
         streammux.set_property("batch-size", 1)
-        streammux.set_property("batched-push-timeout", 4000000)
+        streammux.set_property("live-source", True)
+        streammux.set_property("batched-push-timeout", 40000)
         pgie.set_property("config-file-path", self.model_config)
 
         pipeline.add(source)
         pipeline.add(caps_filter)
-        pipeline.add(jpegdec)
-        pipeline.add(vidconv)
-        pipeline.add(nvvidconv)
+        pipeline.add(decoder)
+        pipeline.add(decodeconv)
+        pipeline.add(decode_caps)
         pipeline.add(streammux)
         pipeline.add(pgie)
         pipeline.add(nvvidconv_osd)
@@ -130,13 +139,17 @@ class DeepStreamPipeline:
         pipeline.add(fakesink)
 
         source.link(caps_filter)
-        caps_filter.link(jpegdec)
-        jpegdec.link(vidconv)
-        vidconv.link(nvvidconv)
+        caps_filter.link(decoder)
+        if not decoder.link(decodeconv):
+            raise RuntimeError("Failed to link H264 decoder to converter")
+        if not decodeconv.link(decode_caps):
+            raise RuntimeError("Failed to link decoder converter to caps")
 
         sinkpad = streammux.get_request_pad("sink_0")
-        srcpad = nvvidconv.get_static_pad("src")
-        srcpad.link(sinkpad)
+        srcpad = decode_caps.get_static_pad("src")
+        link_result = srcpad.link(sinkpad)
+        if link_result != Gst.PadLinkReturn.OK:
+            raise RuntimeError(f"Failed to link decoded video to streammux: {link_result}")
 
         streammux.link(pgie)
         pgie.link(nvvidconv_osd)
@@ -163,6 +176,16 @@ class DeepStreamPipeline:
             except StopIteration:
                 break
 
+            self._probe_counter = (self._probe_counter + 1) % 3
+            if self._probe_counter:
+                with self._status_lock:
+                    self._last_frame_time = datetime.datetime.now()
+                try:
+                    l_frame = l_frame.next
+                except StopIteration:
+                    break
+                continue
+
             person_count = 0
             l_obj = frame_meta.obj_meta_list
             while l_obj is not None:
@@ -177,22 +200,6 @@ class DeepStreamPipeline:
                 except StopIteration:
                     break
 
-            frame = pyds.get_nvds_buf_surface(hash(gst_buffer), frame_meta.batch_id)
-            frame_copy = np.array(frame, copy=True, order="C")
-            frame_copy = cv2.cvtColor(frame_copy, cv2.COLOR_RGBA2BGR)
-
-            timestamp = time.strftime("%Y/%m/%d %H:%M:%S", time.localtime())
-            cv2.putText(
-                frame_copy,
-                timestamp,
-                (10, 30),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                1,
-                (255, 255, 255),
-                2,
-                cv2.LINE_AA,
-            )
-
             snoozing = self.is_snoozing()
             if snoozing:
                 self.sampling_state.force_snapshot = False
@@ -204,16 +211,28 @@ class DeepStreamPipeline:
                 )
 
             if should_sample:
+                frame = pyds.get_nvds_buf_surface(hash(gst_buffer), frame_meta.batch_id)
+                frame_copy = np.array(frame, copy=True, order="C")
+                frame_copy = cv2.cvtColor(frame_copy, cv2.COLOR_RGBA2BGR)
                 self.storage.save_sample(frame_copy, self.camera_name)
                 self._play_sample_sound()
 
             if self._last_frame_time is None:
                 logger.info("First frame received: %s", self.camera_id)
 
-            ret, jpeg = cv2.imencode(".jpg", frame_copy, [int(cv2.IMWRITE_JPEG_QUALITY), 80])
-            if ret:
-                with self._jpeg_lock:
-                    self._latest_jpeg = jpeg.tobytes()
+            now_mono = time.monotonic()
+            if now_mono >= self._next_preview_at:
+                frame = pyds.get_nvds_buf_surface(hash(gst_buffer), frame_meta.batch_id)
+                preview = np.array(frame, copy=True, order="C")
+                preview = cv2.cvtColor(preview, cv2.COLOR_RGBA2BGR)
+                timestamp = time.strftime("%Y/%m/%d %H:%M:%S", time.localtime())
+                cv2.putText(preview, timestamp, (10, 30), cv2.FONT_HERSHEY_SIMPLEX,
+                            1, (255, 255, 255), 2, cv2.LINE_AA)
+                ret, jpeg = cv2.imencode(".jpg", preview, [int(cv2.IMWRITE_JPEG_QUALITY), 75])
+                if ret:
+                    with self._jpeg_lock:
+                        self._latest_jpeg = jpeg.tobytes()
+                self._next_preview_at = now_mono + self._preview_interval
 
             with self._status_lock:
                 self._last_frame_time = datetime.datetime.now()

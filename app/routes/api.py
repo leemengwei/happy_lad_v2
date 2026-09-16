@@ -2,6 +2,11 @@ import yaml
 import os
 import datetime
 import re
+import subprocess
+import tempfile
+import threading
+import textwrap
+import time
 from flask import Blueprint, current_app, jsonify, request, url_for, send_from_directory
 from werkzeug.utils import secure_filename
 from PIL import Image, ExifTags
@@ -10,6 +15,18 @@ import cv2
 from app.services.sampling import SamplingPolicy
 
 api_bp = Blueprint("api", __name__)
+FEEDBACK_AUTO_UPGRADE_LOCK = threading.Lock()
+FEEDBACK_AUTO_UPGRADE_STATE_LOCK = threading.Lock()
+FEEDBACK_AUTO_UPGRADE_STATE = {
+    "running": False,
+    "started_at": None,
+    "finished_at": None,
+    "updated_notes": 0,
+    "summary": "",
+    "plan": "",
+    "error": "",
+    "logs": [],
+}
 
 ALLOWED_EXTENSIONS = {
     ".jpg", ".jpeg", ".png", ".gif", ".webp", ".heic", ".heif",
@@ -26,6 +43,10 @@ XMP_DATETIME_PATTERNS = (
     r"<xmp:CreateDate>([^<]+)</xmp:CreateDate>",
     r"<xmp:ModifyDate>([^<]+)</xmp:ModifyDate>",
 )
+VIDEO_DATETIME_PATTERNS = (
+    r"creation_time\s*:\s*([0-9T:\-\.\+Z]+)",
+    r"com\.apple\.quicktime\.creationdate\s*:\s*([^\n\r]+)",
+)
 
 
 def _get_manager():
@@ -38,6 +59,181 @@ def _get_config_path() -> str:
 
 def _bad_request(message: str):
     return jsonify({"error": message}), 400
+
+
+def _uploader_unavailable_response():
+    message = current_app.config.get("UPLOADER_STORAGE_ERROR") or "相册存储不可用。"
+    return jsonify({"error": message}), 503
+
+
+def _get_media_library_or_error():
+    media_library = current_app.config.get("MEDIA_LIBRARY")
+    if media_library is None or not current_app.config.get("UPLOADER_STORAGE_READY"):
+        return None, _uploader_unavailable_response()
+    return media_library, None
+
+
+def _get_uploads_dir_or_error():
+    uploads_dir = current_app.config.get("UPLOADS_DIR") or ""
+    if not uploads_dir or not current_app.config.get("UPLOADER_STORAGE_READY"):
+        return None, _uploader_unavailable_response()
+    return uploads_dir, None
+
+
+def _extract_auto_upgrade_sections(last_message: str):
+    text = (last_message or "").strip()
+    if not text:
+        return "Codex 已执行自动升级。", "Codex 已执行自动升级。"
+    summary_match = re.search(r"【修改摘要】\s*(.+?)(?:\n【实施方案】|$)", text, flags=re.S)
+    plan_match = re.search(r"【实施方案】\s*(.+)$", text, flags=re.S)
+    summary = (summary_match.group(1).strip() if summary_match else "").strip()
+    plan = (plan_match.group(1).strip() if plan_match else "").strip()
+    if not summary:
+        summary = next((line.strip() for line in text.splitlines() if line.strip()), "Codex 已执行自动升级。")
+    if not plan:
+        lines = [line.strip() for line in text.splitlines() if line.strip()]
+        plan = "\n".join(lines[:6]) if lines else summary
+    return summary[:500], plan[:2000]
+
+
+def _feedback_state_snapshot():
+    with FEEDBACK_AUTO_UPGRADE_STATE_LOCK:
+        return {
+            "running": bool(FEEDBACK_AUTO_UPGRADE_STATE.get("running")),
+            "started_at": FEEDBACK_AUTO_UPGRADE_STATE.get("started_at"),
+            "finished_at": FEEDBACK_AUTO_UPGRADE_STATE.get("finished_at"),
+            "updated_notes": int(FEEDBACK_AUTO_UPGRADE_STATE.get("updated_notes") or 0),
+            "summary": FEEDBACK_AUTO_UPGRADE_STATE.get("summary") or "",
+            "plan": FEEDBACK_AUTO_UPGRADE_STATE.get("plan") or "",
+            "error": FEEDBACK_AUTO_UPGRADE_STATE.get("error") or "",
+            "logs": list(FEEDBACK_AUTO_UPGRADE_STATE.get("logs") or []),
+        }
+
+
+def _feedback_log(message: str):
+    timestamp = datetime.datetime.now().strftime("%H:%M:%S")
+    line = f"[{timestamp}] {message}"
+    with FEEDBACK_AUTO_UPGRADE_STATE_LOCK:
+        logs = FEEDBACK_AUTO_UPGRADE_STATE.setdefault("logs", [])
+        logs.append(line)
+        if len(logs) > 400:
+            del logs[:-400]
+
+
+def _schedule_process_restart(delay_seconds: float = 0.8):
+    def _delayed_exit():
+        time.sleep(delay_seconds)
+        os._exit(0)
+
+    threading.Thread(target=_delayed_exit, daemon=True).start()
+
+
+def _run_feedback_auto_upgrade_job(repo_root: str, pending_notes: list, media_library):
+    try:
+        _feedback_log(f"自动升级任务开始，待处理意见 {len(pending_notes)} 条。")
+        notes_text = "\n".join(
+            [
+                f"- #{item['id']} | {item.get('nickname') or '家人'} | {item.get('created_at')}\n  {item.get('content', '')}"
+                for item in pending_notes
+            ]
+        )
+        prompt = textwrap.dedent(
+            f"""
+            你正在仓库 {repo_root} 内执行“自动升级”任务。
+            请根据以下意见完成代码修改：优先处理能安全落地的项，必要时可合并同类项。
+            仅允许修改当前仓库文件，不要修改系统配置，不要执行危险命令。
+            完成后请用如下格式输出最终总结：
+            【修改摘要】
+            一段不超过120字的中文摘要
+            【实施方案】
+            用 2-6 行中文说明主要改动点
+
+            待处理意见如下（这些意见尚未修改）：
+            {notes_text}
+            """
+        ).strip()
+
+        output_file = tempfile.NamedTemporaryFile(prefix="codex_feedback_", suffix=".txt", delete=False)
+        output_file_path = output_file.name
+        output_file.close()
+        try:
+            command = [
+                "codex",
+                "-a",
+                "never",
+                "-s",
+                "workspace-write",
+                "exec",
+                "--cd",
+                repo_root,
+                "--output-last-message",
+                output_file_path,
+                prompt,
+            ]
+            _feedback_log("已启动 Codex 执行。")
+            process = subprocess.Popen(
+                command,
+                cwd=repo_root,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                bufsize=1,
+            )
+            if process.stdout is not None:
+                for line in process.stdout:
+                    clean = line.rstrip()
+                    if clean:
+                        _feedback_log(clean[:1200])
+            return_code = process.wait(timeout=1800)
+            if return_code != 0:
+                raise RuntimeError(f"codex exec failed with exit code {return_code}")
+
+            last_message = ""
+            if os.path.exists(output_file_path):
+                with open(output_file_path, "r", encoding="utf-8") as file:
+                    last_message = file.read().strip()
+            summary, plan = _extract_auto_upgrade_sections(last_message)
+            updated_count = 0
+            upgraded_at = datetime.datetime.now().isoformat()
+            for item in pending_notes:
+                note_id = int(item["id"])
+                note_content = (item.get("content") or "").strip()
+                preview = note_content[:26] + ("..." if len(note_content) > 26 else "")
+                note_summary = f"已针对“{preview or '该意见'}”处理：{summary}"
+                ok = media_library.mark_feedback_note_upgraded(
+                    note_id=note_id,
+                    summary=note_summary,
+                    plan=plan,
+                    upgraded_at=upgraded_at,
+                )
+                if ok:
+                    updated_count += 1
+            with FEEDBACK_AUTO_UPGRADE_STATE_LOCK:
+                FEEDBACK_AUTO_UPGRADE_STATE["updated_notes"] = int(updated_count)
+                FEEDBACK_AUTO_UPGRADE_STATE["summary"] = summary
+                FEEDBACK_AUTO_UPGRADE_STATE["plan"] = plan
+            _feedback_log(f"任务完成，已标记 {updated_count} 条意见为已修改。")
+            if updated_count > 0:
+                _feedback_log("已完成自动升级，准备自动重启服务。")
+                _schedule_process_restart()
+        finally:
+            try:
+                os.remove(output_file_path)
+            except Exception:
+                pass
+    except subprocess.TimeoutExpired:
+        with FEEDBACK_AUTO_UPGRADE_STATE_LOCK:
+            FEEDBACK_AUTO_UPGRADE_STATE["error"] = "codex exec timeout"
+        _feedback_log("任务超时：codex exec timeout")
+    except Exception as exc:
+        with FEEDBACK_AUTO_UPGRADE_STATE_LOCK:
+            FEEDBACK_AUTO_UPGRADE_STATE["error"] = str(exc)
+        _feedback_log(f"任务失败：{exc}")
+    finally:
+        with FEEDBACK_AUTO_UPGRADE_STATE_LOCK:
+            FEEDBACK_AUTO_UPGRADE_STATE["running"] = False
+            FEEDBACK_AUTO_UPGRADE_STATE["finished_at"] = datetime.datetime.now().isoformat()
+        FEEDBACK_AUTO_UPGRADE_LOCK.release()
 
 
 def _parse_exif_datetime(value: str):
@@ -83,6 +279,29 @@ def _extract_xmp_datetime(img: Image.Image):
 
 
 def _extract_captured_at(abs_path: str, ext: str, media_type: str):
+    if media_type == "video":
+        try:
+            cmd = [
+                "ffprobe",
+                "-v",
+                "error",
+                "-show_entries",
+                "format_tags=creation_time:stream_tags=creation_time:format_tags=com.apple.quicktime.creationdate",
+                "-of",
+                "default=noprint_wrappers=1",
+                abs_path,
+            ]
+            output = subprocess.check_output(cmd, stderr=subprocess.STDOUT, text=True, timeout=8)
+            for pattern in VIDEO_DATETIME_PATTERNS:
+                match = re.search(pattern, output, flags=re.IGNORECASE)
+                if not match:
+                    continue
+                parsed = _parse_flexible_datetime(match.group(1))
+                if parsed:
+                    return parsed
+        except Exception:
+            return None
+        return None
     if media_type != "image":
         return None
     try:
@@ -224,6 +443,15 @@ def _get_pipeline_or_error(camera_id: str):
 def list_cameras():
     manager = _get_manager()
     return jsonify(manager.list_status())
+
+
+@api_bp.get("/home/media")
+def list_home_media():
+    media_library, error = _get_media_library_or_error()
+    if error:
+        return error
+    media_items = media_library.list_media(limit=12)
+    return jsonify(media_items)
 
 
 @api_bp.post("/cameras/<camera_id>/snapshot")
@@ -381,7 +609,9 @@ def health_status():
 
 @api_bp.post("/uploader/upload")
 def upload_media():
-    media_library = current_app.config["MEDIA_LIBRARY"]
+    media_library, error = _get_media_library_or_error()
+    if error:
+        return error
     file = request.files.get("file")
     if file is None or not file.filename:
         return _bad_request("missing file")
@@ -447,6 +677,7 @@ def upload_media():
             "media_url": media_url,
             "poster_url": poster_url,
             "captured_at": captured_at,
+            "created_at": datetime.datetime.now().isoformat(),
             "latitude": latitude,
             "longitude": longitude,
             "location_text": location_text,
@@ -454,9 +685,190 @@ def upload_media():
     )
 
 
+@api_bp.post("/uploader/media/<int:media_id>/fix-captured-at")
+def fix_media_captured_at(media_id: int):
+    payload = request.get_json(force=True, silent=True) or {}
+    media_library, error = _get_media_library_or_error()
+    if error:
+        return error
+    item = media_library.get_media_by_id(media_id)
+    if not item:
+        return jsonify({"error": "media not found"}), 404
+    uploads_dir, error = _get_uploads_dir_or_error()
+    if error:
+        return error
+    abs_path = os.path.join(uploads_dir, item["storage_path"])
+    ext = os.path.splitext(item["storage_path"])[1].lower()
+    media_type = "image" if ext in IMAGE_EXTENSIONS else "video"
+    captured_at = _parse_flexible_datetime(payload.get("captured_at")) if payload.get("captured_at") else None
+    if not captured_at:
+        captured_at = _extract_captured_at(abs_path, ext, media_type)
+    if not captured_at:
+        return jsonify({"error": "captured_at not found"}), 400
+    result = media_library.update_media_captured_at(media_id, captured_at)
+    return jsonify({"status": "ok", "result": result})
+
+
+def _funny_suffix(seed: int) -> str:
+    tails = ["(萌萌贴贴)", "(小帽子认证)", "(今日最佳)", "(冒冒哈哈哈)", "(亲亲~)"]
+    return tails[seed % len(tails)]
+
+
+@api_bp.get("/uploader/media/<int:media_id>/interactions")
+def get_media_interactions(media_id: int):
+    media_library, error = _get_media_library_or_error()
+    if error:
+        return error
+    item = media_library.get_media_by_id(media_id)
+    if not item:
+        return jsonify({"error": "media not found"}), 404
+    comments = media_library.list_media_comments(media_id=media_id, limit=120)
+    danmu = media_library.list_media_danmu(media_id=media_id, limit=240)
+    return jsonify({"comments": comments, "danmu": danmu})
+
+
+@api_bp.post("/uploader/media/<int:media_id>/comment")
+def post_media_comment(media_id: int):
+    payload = request.get_json(force=True, silent=True) or {}
+    content = str(payload.get("content", "")).strip()
+    nickname = str(payload.get("nickname", "")).strip() or "家人"
+    if not content:
+        return _bad_request("content is required")
+    if len(content) > 240:
+        return _bad_request("content too long")
+    media_library, error = _get_media_library_or_error()
+    if error:
+        return error
+    item = media_library.get_media_by_id(media_id)
+    if not item:
+        return jsonify({"error": "media not found"}), 404
+    fun_content = f"{content} {_funny_suffix(media_id + len(content))}"
+    comment_id = media_library.add_media_comment(media_id=media_id, content=fun_content, nickname=nickname)
+    return jsonify({"status": "ok", "id": comment_id, "content": fun_content, "nickname": nickname})
+
+
+@api_bp.post("/uploader/media/<int:media_id>/danmu")
+def post_media_danmu(media_id: int):
+    payload = request.get_json(force=True, silent=True) or {}
+    content = str(payload.get("content", "")).strip()
+    nickname = str(payload.get("nickname", "")).strip() or "路过的宝宝粉"
+    color = str(payload.get("color", "")).strip() or "#ffffff"
+    try:
+        at_second = float(payload.get("at_second")) if payload.get("at_second") is not None else None
+    except Exception:
+        at_second = None
+    if not content:
+        return _bad_request("content is required")
+    if len(content) > 80:
+        return _bad_request("content too long")
+    media_library, error = _get_media_library_or_error()
+    if error:
+        return error
+    item = media_library.get_media_by_id(media_id)
+    if not item:
+        return jsonify({"error": "media not found"}), 404
+    fun_content = f"{content} {_funny_suffix(media_id + int((at_second or 0) * 10))}"
+    danmu_id = media_library.add_media_danmu(
+        media_id=media_id,
+        content=fun_content,
+        nickname=nickname,
+        at_second=at_second,
+        color=color,
+    )
+    return jsonify(
+        {"status": "ok", "id": danmu_id, "content": fun_content, "nickname": nickname, "at_second": at_second, "color": color}
+    )
+
+
+@api_bp.post("/feedback")
+def post_feedback():
+    payload = request.get_json(force=True, silent=True) or {}
+    content = str(payload.get("content", "")).strip()
+    nickname = str(payload.get("nickname", "")).strip() or "家人"
+    if not content:
+        return _bad_request("content is required")
+    if len(content) > 1000:
+        return _bad_request("content too long")
+    media_library, error = _get_media_library_or_error()
+    if error:
+        return error
+    note_id = media_library.add_feedback_note(content=content, nickname=nickname)
+    return jsonify({"status": "ok", "id": note_id})
+
+
+@api_bp.delete("/feedback/<int:note_id>")
+def delete_feedback(note_id: int):
+    media_library, error = _get_media_library_or_error()
+    if error:
+        return error
+    ok = media_library.delete_feedback_note(note_id=note_id)
+    if not ok:
+        return jsonify({"error": "feedback not found"}), 404
+    return jsonify({"status": "ok", "id": int(note_id)})
+
+
+@api_bp.post("/feedback/auto-upgrade")
+def auto_upgrade_feedback():
+    if not FEEDBACK_AUTO_UPGRADE_LOCK.acquire(blocking=False):
+        state = _feedback_state_snapshot()
+        return jsonify({"error": "auto upgrade in progress", "state": state}), 409
+
+    media_library, error = _get_media_library_or_error()
+    if error:
+        FEEDBACK_AUTO_UPGRADE_LOCK.release()
+        return error
+    payload = request.get_json(force=True, silent=True) or {}
+    note_id = payload.get("note_id")
+    if note_id is None:
+        pending_notes = media_library.list_unupgraded_feedback_notes(limit=200)
+    else:
+        try:
+            note_id = int(note_id)
+        except (TypeError, ValueError):
+            FEEDBACK_AUTO_UPGRADE_LOCK.release()
+            return _bad_request("note_id must be integer")
+        pending_notes = media_library.list_unupgraded_feedback_notes_by_ids([note_id], limit=1)
+    if not pending_notes:
+        FEEDBACK_AUTO_UPGRADE_LOCK.release()
+        return jsonify({"status": "no_pending", "message": "没有待升级的意见或该意见已升级"})
+
+    repo_root = os.path.dirname(current_app.root_path)
+    with FEEDBACK_AUTO_UPGRADE_STATE_LOCK:
+        FEEDBACK_AUTO_UPGRADE_STATE["running"] = True
+        FEEDBACK_AUTO_UPGRADE_STATE["started_at"] = datetime.datetime.now().isoformat()
+        FEEDBACK_AUTO_UPGRADE_STATE["finished_at"] = None
+        FEEDBACK_AUTO_UPGRADE_STATE["updated_notes"] = 0
+        FEEDBACK_AUTO_UPGRADE_STATE["summary"] = ""
+        FEEDBACK_AUTO_UPGRADE_STATE["plan"] = ""
+        FEEDBACK_AUTO_UPGRADE_STATE["error"] = ""
+        FEEDBACK_AUTO_UPGRADE_STATE["logs"] = []
+    _feedback_log("已接收请求，正在准备执行 Codex。")
+
+    worker = threading.Thread(
+        target=_run_feedback_auto_upgrade_job,
+        args=(repo_root, pending_notes, media_library),
+        daemon=True,
+    )
+    worker.start()
+    return jsonify({"status": "started", "pending_notes": len(pending_notes), "note_ids": [int(item["id"]) for item in pending_notes]})
+
+
+@api_bp.get("/feedback/auto-upgrade/status")
+def feedback_auto_upgrade_status():
+    return jsonify({"status": "ok", "state": _feedback_state_snapshot()})
+
+
+@api_bp.post("/service/restart")
+def restart_service():
+    _schedule_process_restart()
+    return jsonify({"status": "ok", "message": "service restarting"})
+
+
 @api_bp.get("/uploader/media")
 def list_uploaded_media():
-    media_library = current_app.config["MEDIA_LIBRARY"]
+    media_library, error = _get_media_library_or_error()
+    if error:
+        return error
     try:
         per_page = int(request.args.get("per_page", request.args.get("limit", 200)))
     except ValueError:
@@ -499,7 +911,9 @@ def delete_uploaded_media():
     except (TypeError, ValueError):
         return _bad_request("id must be integer")
 
-    media_library = current_app.config["MEDIA_LIBRARY"]
+    media_library, error = _get_media_library_or_error()
+    if error:
+        return error
     result = media_library.move_to_trash(media_id)
     if not result.get("moved"):
         return jsonify({"error": "media not found"}), 404
@@ -508,7 +922,9 @@ def delete_uploaded_media():
 
 @api_bp.get("/uploader/trash")
 def list_uploader_trash():
-    media_library = current_app.config["MEDIA_LIBRARY"]
+    media_library, error = _get_media_library_or_error()
+    if error:
+        return error
     return jsonify({"items": media_library.list_trash(limit=300)})
 
 
@@ -522,7 +938,9 @@ def restore_uploader_trash():
         media_id = int(media_id)
     except (TypeError, ValueError):
         return _bad_request("id must be integer")
-    media_library = current_app.config["MEDIA_LIBRARY"]
+    media_library, error = _get_media_library_or_error()
+    if error:
+        return error
     result = media_library.restore_from_trash(media_id)
     if not result.get("restored"):
         return jsonify({"error": "media not found in trash"}), 404
@@ -539,7 +957,9 @@ def permanently_delete_uploader_trash():
         media_id = int(media_id)
     except (TypeError, ValueError):
         return _bad_request("id must be integer")
-    media_library = current_app.config["MEDIA_LIBRARY"]
+    media_library, error = _get_media_library_or_error()
+    if error:
+        return error
     result = media_library.permanently_delete(media_id)
     if not result.get("deleted"):
         return jsonify({"error": "media not found"}), 404
@@ -548,11 +968,15 @@ def permanently_delete_uploader_trash():
 
 @api_bp.get("/uploader/download/<int:media_id>")
 def download_uploader_media(media_id: int):
-    media_library = current_app.config["MEDIA_LIBRARY"]
+    media_library, error = _get_media_library_or_error()
+    if error:
+        return error
     item = media_library.get_media_by_id(media_id)
     if not item:
         return jsonify({"error": "media not found"}), 404
-    uploads_dir = current_app.config["UPLOADS_DIR"]
+    uploads_dir, error = _get_uploads_dir_or_error()
+    if error:
+        return error
     return send_from_directory(
         uploads_dir,
         item["storage_path"],
