@@ -98,15 +98,27 @@ function createHomeMediaItem(item) {
   const node = document.createElement("div");
   node.className = `album-thumb ${item.media_type === "video" ? "media-video" : ""}`;
   node.setAttribute("aria-hidden", "true");
-  const img = document.createElement("img");
-  img.loading = "lazy";
-  img.alt = item.original_name || "媒体";
   if (item.media_type === "video") {
+    // The homepage is a thumbnail grid: use the server-rendered JPEG poster.
+    // Browsers cannot reliably decode iPhone MOV/HEVC just to show a preview.
+    const img = document.createElement("img");
+    img.loading = "lazy";
+    img.alt = item.original_name || "视频媒体";
     img.src = item.poster_url || fallbackImage;
+    img.addEventListener("error", () => {
+      if (fallbackImage && img.src !== fallbackImage) img.src = fallbackImage;
+    }, { once: true });
+    node.appendChild(img);
   } else {
+    const img = document.createElement("img");
+    img.loading = "lazy";
+    img.alt = item.original_name || "媒体";
     img.src = item.media_url;
+    img.addEventListener("error", () => {
+      if (fallbackImage && img.src !== fallbackImage) img.src = fallbackImage;
+    }, { once: true });
+    node.appendChild(img);
   }
-  node.appendChild(img);
   return node;
 }
 
@@ -123,7 +135,7 @@ async function loadHomeDashboardSections() {
 
   const [cameraResult, mediaResult] = await Promise.allSettled([
     fetch("/api/cameras"),
-    fetch("/api/home/media"),
+    fetch("http://192.168.0.110:5001/api/media"),
   ]);
 
   if (cameraLoading) cameraLoading.style.display = "none";

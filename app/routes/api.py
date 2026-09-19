@@ -73,6 +73,10 @@ def _get_media_library_or_error():
     return media_library, None
 
 
+def _get_feedback_library():
+    return current_app.config.get("FEEDBACK_LIBRARY")
+
+
 def _get_uploads_dir_or_error():
     uploads_dir = current_app.config.get("UPLOADS_DIR") or ""
     if not uploads_dir or not current_app.config.get("UPLOADER_STORAGE_READY"):
@@ -142,6 +146,10 @@ def _run_feedback_auto_upgrade_job(repo_root: str, pending_notes: list, media_li
             你正在仓库 {repo_root} 内执行“自动升级”任务。
             请根据以下意见完成代码修改：优先处理能安全落地的项，必要时可合并同类项。
             仅允许修改当前仓库文件，不要修改系统配置，不要执行危险命令。
+            重要部署规则：如果意见涉及“小帽子相册”或远端相册服务，不能只修改本地代码。
+            还必须检查并更新远端服务器 root@192.168.0.110 上的相册服务，远端部署目录为 /root/album_service，
+            数据目录为 /root/nvme/happy_lad_uploader。远端服务使用 OpenWrt procd 管理，服务名为 xiaomaozi-album。
+            SSH 凭据不在意见内容中提供，必须从受保护的部署凭据中读取，禁止把密码写入代码、日志或页面。
             完成后请用如下格式输出最终总结：
             【修改摘要】
             一段不超过120字的中文摘要
@@ -397,6 +405,20 @@ def _generate_video_poster(abs_video_path: str, rel_video_path: str):
     poster_abs_path = os.path.join(uploads_dir, poster_rel_path)
     os.makedirs(os.path.dirname(poster_abs_path), exist_ok=True)
     try:
+        # ffmpeg handles iPhone MOV/HEVC, rotated video, and files whose
+        # moov atom is at the end. OpenCV is only a fallback for simple files.
+        subprocess.run(
+            ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+             "-i", abs_video_path, "-ss", "0.2", "-frames:v", "1",
+             "-vf", "scale=640:-2:force_original_aspect_ratio=decrease",
+             "-pix_fmt", "yuvj420p", poster_abs_path],
+            check=True, timeout=45,
+        )
+        if os.path.isfile(poster_abs_path) and os.path.getsize(poster_abs_path) > 0:
+            return poster_rel_path, url_for("dashboard.uploaded_media", filename=poster_rel_path)
+    except (OSError, subprocess.SubprocessError):
+        pass
+    try:
         cap = cv2.VideoCapture(abs_video_path)
         if not cap.isOpened():
             return None, None
@@ -417,7 +439,23 @@ def _generate_video_poster(abs_video_path: str, rel_video_path: str):
         poster_url = url_for("dashboard.uploaded_media", filename=poster_rel_path)
         return poster_rel_path, poster_url
     except Exception:
+        try:
+            if os.path.isfile(poster_abs_path):
+                os.remove(poster_abs_path)
+        except OSError:
+            pass
         return None, None
+
+
+def _repair_home_video_posters(media_library):
+    """Repair old uploads lazily so one failed boot-time repair is recoverable."""
+    for item in media_library.list_videos_missing_poster():
+        abs_path = os.path.join(current_app.config["UPLOADS_DIR"], item["storage_path"])
+        if not os.path.isfile(abs_path):
+            continue
+        poster_path, poster_url = _generate_video_poster(abs_path, item["storage_path"])
+        if poster_path:
+            media_library.update_media_poster(item["id"], poster_path, poster_url)
 
 
 def _normalize_uploaded_name(original_name: str, ext: str, generated_stored_name: str) -> str:
@@ -450,6 +488,9 @@ def list_home_media():
     media_library, error = _get_media_library_or_error()
     if error:
         return error
+    media_items = media_library.list_media(limit=12)
+    _repair_home_video_posters(media_library)
+    # Re-read so a repaired legacy poster is included in this response.
     media_items = media_library.list_media(limit=12)
     return jsonify(media_items)
 
@@ -605,6 +646,30 @@ def health_status():
             "cameras": statuses,
         }
     )
+
+
+@api_bp.post("/video-poster")
+def decode_video_poster():
+    """Decode a video on the main host for OpenWrt album clients."""
+    upload = request.files.get("file")
+    if upload is None:
+        return _bad_request("missing video file")
+    suffix = os.path.splitext(upload.filename or ".mov")[1] or ".mov"
+    with tempfile.NamedTemporaryFile(suffix=suffix, delete=True) as tmp:
+        upload.save(tmp.name)
+        cap = cv2.VideoCapture(tmp.name)
+        if not cap.isOpened():
+            cap.release()
+            return jsonify({"error": "video decoder unavailable"}), 415
+        cap.set(cv2.CAP_PROP_POS_MSEC, 200)
+        ok, frame = cap.read()
+        cap.release()
+    if not ok or frame is None:
+        return jsonify({"error": "video frame unavailable"}), 422
+    ok, encoded = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 88])
+    if not ok:
+        return jsonify({"error": "poster encode failed"}), 500
+    return encoded.tobytes(), 200, {"Content-Type": "image/jpeg", "Cache-Control": "no-store"}
 
 
 @api_bp.post("/uploader/upload")
@@ -789,18 +854,14 @@ def post_feedback():
         return _bad_request("content is required")
     if len(content) > 1000:
         return _bad_request("content too long")
-    media_library, error = _get_media_library_or_error()
-    if error:
-        return error
+    media_library = _get_feedback_library()
     note_id = media_library.add_feedback_note(content=content, nickname=nickname)
     return jsonify({"status": "ok", "id": note_id})
 
 
 @api_bp.delete("/feedback/<int:note_id>")
 def delete_feedback(note_id: int):
-    media_library, error = _get_media_library_or_error()
-    if error:
-        return error
+    media_library = _get_feedback_library()
     ok = media_library.delete_feedback_note(note_id=note_id)
     if not ok:
         return jsonify({"error": "feedback not found"}), 404
@@ -813,10 +874,7 @@ def auto_upgrade_feedback():
         state = _feedback_state_snapshot()
         return jsonify({"error": "auto upgrade in progress", "state": state}), 409
 
-    media_library, error = _get_media_library_or_error()
-    if error:
-        FEEDBACK_AUTO_UPGRADE_LOCK.release()
-        return error
+    media_library = _get_feedback_library()
     payload = request.get_json(force=True, silent=True) or {}
     note_id = payload.get("note_id")
     if note_id is None:
