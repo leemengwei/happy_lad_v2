@@ -36,7 +36,8 @@ def age_text(dt):
     return f'{years}岁{months}个月{days}天'
 
 def media_urls(item):
-    item['media_url'] = url_for('dashboard.uploaded_media', filename=item['storage_path'], _external=True)
+    storage_path = item.get('storage_path')
+    item['media_url'] = url_for('dashboard.uploaded_media', filename=storage_path, _external=True) if storage_path else ''
     poster = item.get('poster_path')
     item['poster_url'] = url_for('dashboard.uploaded_media', filename=poster, _external=True) if poster and (UPLOADS / poster).is_file() else ''
 
