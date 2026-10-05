@@ -5,3 +5,4 @@ images/
 *.pyc
 data/
 uploads/
+password.txt

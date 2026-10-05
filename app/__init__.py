@@ -9,6 +9,8 @@ def create_app(pipeline_manager):
     app = Flask(__name__)
     app.secret_key = "happy_lad_v2"
     app.config["PIPELINE_MANAGER"] = pipeline_manager
+    app.config["REMOTE_ALBUM_SERVER"] = "root@192.168.0.110"
+    app.config["REMOTE_ALBUM_PATH"] = "/root/nvme/album_service"
 
     external_base = "/mnt/external_us/happy_lad_uploader"
     mount_point = "/mnt/external_us"
@@ -18,6 +20,11 @@ def create_app(pipeline_manager):
     app.config["UPLOADS_DIR"] = ""
     app.config["MEDIA_DB_PATH"] = ""
     app.config["MEDIA_LIBRARY"] = None
+    app.config["FEEDBACK_LIBRARY"] = None
+
+    feedback_db = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data", "feedback.db")
+    os.makedirs(os.path.dirname(feedback_db), exist_ok=True)
+    app.config["FEEDBACK_LIBRARY"] = MediaLibrary(db_path=feedback_db, uploads_dir=os.path.join(os.path.dirname(feedback_db), "feedback_uploads"))
 
     if not os.path.ismount(mount_point):
         app.config["UPLOADER_STORAGE_ERROR"] = f"相册存储盘不可用：挂载点 {mount_point} 未挂载。"

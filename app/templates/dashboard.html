@@ -20,16 +20,14 @@
   <div class="album-thumbs" data-role="home-media-grid" style="display: none;"></div>
   <div class="muted" data-role="home-media-empty" style="display: none;">暂时还没有相册内容</div>
   <div class="muted" data-role="home-media-error" style="display: none;">相册加载失败，请稍后重试</div>
-  {% if not uploader_storage_ready %}
-  <div class="muted" style="color: #b42318; margin-top: 10px;">{{ uploader_storage_error or "相册存储不可用。" }}</div>
-  {% endif %}
+  <div class="muted" style="margin-top: 10px;">相册运行在独立存储服务器上，点击后直接访问。</div>
   <div
     data-role="home-media-config"
     data-fallback-image="{{ url_for('static', filename='img/sleepy-pig.svg') }}"
     style="display: none;"
   ></div>
   <div class="actions">
-    <a class="btn" href="{{ url_for('dashboard.uploader') }}">去小帽子相册</a>
+    <a class="btn" href="http://192.168.0.110:5001/">去小帽子相册</a>
   </div>
 </section>
 <div

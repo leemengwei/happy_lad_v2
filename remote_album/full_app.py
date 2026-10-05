@@ -1,4 +1,4 @@
-import datetime, mimetypes, os, sqlite3, subprocess, urllib.request, uuid
+import datetime, mimetypes, os, re, sqlite3, subprocess, urllib.request, uuid
 from pathlib import Path
 from flask import Flask, Blueprint, jsonify, render_template, request, send_from_directory, url_for
 from werkzeug.utils import secure_filename
@@ -82,6 +82,35 @@ def generate_video_poster(abs_video_path, rel_video_path):
         except Exception:
             return None
 
+def _captured_at(path, media_type):
+    """Read the camera timestamp before inserting the media row."""
+    try:
+        if media_type == 'video':
+            output = subprocess.check_output(
+                ['ffprobe', '-v', 'error', '-show_entries',
+                 'format_tags=creation_time:stream_tags=creation_time:format_tags=com.apple.quicktime.creationdate',
+                 '-of', 'default=noprint_wrappers=1', str(path)],
+                stderr=subprocess.STDOUT, text=True, timeout=8)
+            match = re.search(r'(?:creation_time|com\.apple\.quicktime\.creationdate)\s*:\s*([^\n\r]+)', output, re.I)
+            value = match.group(1).strip() if match else None
+        elif media_type == 'image':
+            # OpenWrt deployment intentionally has no Pillow dependency.
+            # EXIF stores the standard camera date as an ASCII value, and
+            # XMP uses the same ISO/date forms; scan only for those formats.
+            payload = Path(path).read_bytes()
+            match = re.search(rb'(\d{4}:\d\d:\d\d[ :T]\d\d:\d\d:\d\d|\d{4}-\d\d-\d\d[T ]\d\d:\d\d:\d\d(?:\.\d+)?(?:Z|[+-]\d\d:\d\d)?)', payload)
+            value = match.group(1).decode('ascii') if match else None
+        else:
+            value = None
+        if not value:
+            return None
+        value = str(value).strip().replace('Z', '+00:00')
+        if re.match(r'^\d{4}:\d\d:\d\d ', value):
+            value = value.replace(':', '-', 2)
+        return datetime.datetime.fromisoformat(value.replace(' ', 'T', 1)).isoformat()
+    except Exception:
+        return None
+
 def repair_missing_posters():
     for item in library.list_videos_missing_poster():
         path = UPLOADS / item['storage_path']
@@ -133,10 +162,11 @@ def upload():
     f=request.files.get('file')
     if not f or not f.filename: return jsonify(error='missing file'),400
     name=secure_filename(f.filename); ext=Path(name).suffix.lower(); day=datetime.datetime.now().strftime('%Y/%m/%d'); d=UPLOADS/day; d.mkdir(parents=True,exist_ok=True); stored=datetime.datetime.now().strftime('%Y%m%d_%H%M%S_%f')+ext; target=d/stored; f.save(target); rel=f'{day}/{stored}'; typ='video' if (f.mimetype or '').startswith('video/') else 'image'
+    captured_at = _captured_at(target, typ)
     poster = generate_video_poster(target, rel) if typ == 'video' else None
     poster_url = url_for('dashboard.uploaded_media', filename=poster) if poster else ''
-    mid=library.save_media(original_name=name,stored_name=stored,ext=ext,mime_type=f.mimetype or 'application/octet-stream',size_bytes=target.stat().st_size,media_type=typ,storage_path=rel,media_url=url_for('dashboard.uploaded_media',filename=rel),poster_path=poster,poster_url=poster_url)
-    return jsonify(status='ok',id=mid,original_name=name,media_type=typ,size_bytes=target.stat().st_size,storage_path=rel,media_url=url_for('dashboard.uploaded_media',filename=rel),poster_url=poster_url,created_at=datetime.datetime.now().isoformat())
+    mid=library.save_media(original_name=name,stored_name=stored,ext=ext,mime_type=f.mimetype or 'application/octet-stream',size_bytes=target.stat().st_size,media_type=typ,storage_path=rel,media_url=url_for('dashboard.uploaded_media',filename=rel),poster_path=poster,poster_url=poster_url,captured_at=captured_at)
+    return jsonify(status='ok',id=mid,original_name=name,media_type=typ,size_bytes=target.stat().st_size,storage_path=rel,media_url=url_for('dashboard.uploaded_media',filename=rel),poster_url=poster_url,captured_at=captured_at,created_at=datetime.datetime.now().isoformat())
 
 @api.post('/uploader/delete')
 def delete():

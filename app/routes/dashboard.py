@@ -140,9 +140,14 @@ def dashboard():
 
 @dashboard_bp.route("/feedback")
 def feedback_board():
-    media_library = current_app.config.get("MEDIA_LIBRARY")
+    media_library = current_app.config.get("FEEDBACK_LIBRARY")
     notes = media_library.list_feedback_notes(limit=200) if media_library is not None else []
-    return render_template("feedback.html", notes=notes)
+    return render_template(
+        "feedback.html",
+        notes=notes,
+        remote_album_server=current_app.config.get("REMOTE_ALBUM_SERVER"),
+        remote_album_path=current_app.config.get("REMOTE_ALBUM_PATH"),
+    )
 
 
 @dashboard_bp.route("/qr/home.png")

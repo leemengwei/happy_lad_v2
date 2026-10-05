@@ -186,7 +186,9 @@ class MediaLibrary:
             conn.close()
 
     def list_media(self, limit: int = 100) -> List[Dict]:
-        result = self.list_media_paginated(page=1, per_page=limit, sort_by="uploaded", sort_order="desc")
+        # The home preview is a timeline: camera metadata must take precedence
+        # over the time at which the file happened to reach the server.
+        result = self.list_media_paginated(page=1, per_page=limit, sort_by="captured", sort_order="desc")
         return result["items"]
 
     def get_media_by_id(self, media_id: int) -> Dict:
@@ -219,9 +221,13 @@ class MediaLibrary:
         safe_sort_by = (sort_by or "uploaded").lower()
         safe_sort_order = "ASC" if (sort_order or "").lower() == "asc" else "DESC"
 
+        # ISO strings with different timezone offsets do not sort chronologically
+        # as plain TEXT (e.g. 10:00+08:00 vs 03:30Z).  julianday() compares the
+        # actual instants while retaining the upload-time fallback for files
+        # without camera metadata.
         sort_column_map = {
             "uploaded": "created_at",
-            "captured": "COALESCE(captured_at, created_at)",
+            "captured": "julianday(COALESCE(captured_at, created_at))",
             "size": "size_bytes",
             "name": "original_name",
         }
