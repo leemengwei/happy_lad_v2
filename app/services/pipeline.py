@@ -81,14 +81,13 @@ class DeepStreamPipeline:
 
         source = Gst.ElementFactory.make("v4l2src", f"source-{self.camera_id}")
         caps_filter = Gst.ElementFactory.make("capsfilter", f"caps-{self.camera_id}")
-        decoder = Gst.ElementFactory.make("nvjpegdec", f"decoder-{self.camera_id}")
+        decoder = Gst.ElementFactory.make("nvv4l2decoder", f"decoder-{self.camera_id}")
         decodeconv = Gst.ElementFactory.make("nvvideoconvert", f"decodeconv-{self.camera_id}")
         decode_caps = Gst.ElementFactory.make("capsfilter", f"decode-caps-{self.camera_id}")
         streammux = Gst.ElementFactory.make("nvstreammux", f"streammux-{self.camera_id}")
         pgie = Gst.ElementFactory.make("nvinfer", f"primary-{self.camera_id}")
         nvvidconv_osd = Gst.ElementFactory.make("nvvideoconvert", f"osd-convert-{self.camera_id}")
         caps_filter2 = Gst.ElementFactory.make("capsfilter", f"caps2-{self.camera_id}")
-        nvosd = Gst.ElementFactory.make("nvdsosd", f"nvosd-{self.camera_id}")
         fakesink = Gst.ElementFactory.make("fakesink", f"sink-{self.camera_id}")
 
         if not all([
@@ -101,7 +100,6 @@ class DeepStreamPipeline:
             pgie,
             nvvidconv_osd,
             caps_filter2,
-            nvosd,
             fakesink,
         ]):
             raise RuntimeError("Failed to create GStreamer elements")
@@ -112,7 +110,8 @@ class DeepStreamPipeline:
             f"image/jpeg, width={self.width}, height={self.height}, framerate=30/1"
         )
         caps_filter.set_property("caps", caps)
-        decoder.set_property("mjpegdecode", True)
+        decoder.set_property("mjpeg", True)
+        decoder.set_property("enable-max-performance", True)
         decode_caps.set_property(
             "caps", Gst.Caps.from_string("video/x-raw(memory:NVMM),format=NV12")
         )
@@ -135,13 +134,12 @@ class DeepStreamPipeline:
         pipeline.add(pgie)
         pipeline.add(nvvidconv_osd)
         pipeline.add(caps_filter2)
-        pipeline.add(nvosd)
         pipeline.add(fakesink)
 
         source.link(caps_filter)
         caps_filter.link(decoder)
         if not decoder.link(decodeconv):
-            raise RuntimeError("Failed to link H264 decoder to converter")
+            raise RuntimeError("Failed to link JPEG decoder to converter")
         if not decodeconv.link(decode_caps):
             raise RuntimeError("Failed to link decoder converter to caps")
 
@@ -154,15 +152,16 @@ class DeepStreamPipeline:
         streammux.link(pgie)
         pgie.link(nvvidconv_osd)
         nvvidconv_osd.link(caps_filter2)
-        caps_filter2.link(nvosd)
-        nvosd.link(fakesink)
+        caps_filter2.link(fakesink)
 
-        osd_sink_pad = nvosd.get_static_pad("sink")
-        osd_sink_pad.add_probe(Gst.PadProbeType.BUFFER, self._osd_buffer_probe)
+        sampling_src_pad = pgie.get_static_pad("src")
+        sampling_src_pad.add_probe(Gst.PadProbeType.BUFFER, self._sampling_probe)
+        preview_src_pad = caps_filter2.get_static_pad("src")
+        preview_src_pad.add_probe(Gst.PadProbeType.BUFFER, self._preview_src_probe)
 
         return pipeline
 
-    def _osd_buffer_probe(self, pad, info):
+    def _sampling_probe(self, pad, info):
         gst_buffer = info.get_buffer()
         if not gst_buffer:
             return Gst.PadProbeReturn.OK
@@ -210,49 +209,75 @@ class DeepStreamPipeline:
                     person_count=person_count,
                 )
 
-            if should_sample:
-                frame = pyds.get_nvds_buf_surface(hash(gst_buffer), frame_meta.batch_id)
-                frame_copy = np.array(frame, copy=True, order="C")
-                frame_copy = cv2.cvtColor(frame_copy, cv2.COLOR_RGBA2BGR)
-                self.storage.save_sample(frame_copy, self.camera_name)
-                self._play_sample_sound()
-
             if self._last_frame_time is None:
                 logger.info("First frame received: %s", self.camera_id)
 
-            now_mono = time.monotonic()
-            if now_mono >= self._next_preview_at:
+            if should_sample:
+                # Capture before nvdsosd so saved samples contain only the
+                # camera image plus the timestamp, without detection OSD.
                 frame = pyds.get_nvds_buf_surface(hash(gst_buffer), frame_meta.batch_id)
-                preview = np.array(frame, copy=True, order="C")
-                preview = cv2.cvtColor(preview, cv2.COLOR_RGBA2BGR)
+                frame_copy = np.array(frame, copy=True, order="C")
+                frame_copy = cv2.cvtColor(frame_copy, cv2.COLOR_RGBA2BGR)
                 timestamp = time.strftime("%Y/%m/%d %H:%M:%S", time.localtime())
-                cv2.putText(preview, timestamp, (10, 30), cv2.FONT_HERSHEY_SIMPLEX,
-                            1, (255, 255, 255), 2, cv2.LINE_AA)
-                ret, jpeg = cv2.imencode(".jpg", preview, [int(cv2.IMWRITE_JPEG_QUALITY), 75])
-                if ret:
-                    with self._jpeg_lock:
-                        self._latest_jpeg = jpeg.tobytes()
-                self._next_preview_at = now_mono + self._preview_interval
+                cv2.putText(
+                    frame_copy, timestamp, (10, 30), cv2.FONT_HERSHEY_SIMPLEX,
+                    1, (255, 255, 255), 2, cv2.LINE_AA,
+                )
+                self.storage.save_sample(frame_copy, self.camera_name)
+                self._play_sample_sound()
 
             with self._status_lock:
                 self._last_frame_time = datetime.datetime.now()
 
-            display_meta = pyds.nvds_acquire_display_meta_from_pool(batch_meta)
-            display_meta.num_labels = 1
-            text_params = display_meta.text_params[0]
-            text_params.display_text = (
-                f"{self.camera_name} | Person={person_count} | "
-                f"Cooldown={self.sampling_policy.cooldown_seconds}s | "
-                f"Snooze={'ON' if snoozing else 'OFF'}"
+            try:
+                l_frame = l_frame.next
+            except StopIteration:
+                break
+
+        return Gst.PadProbeReturn.OK
+
+    def _preview_src_probe(self, pad, info):
+        """Refresh the preview without drawing detection overlays."""
+        gst_buffer = info.get_buffer()
+        if not gst_buffer:
+            return Gst.PadProbeReturn.OK
+
+        batch_meta = pyds.gst_buffer_get_nvds_batch_meta(hash(gst_buffer))
+        l_frame = batch_meta.frame_meta_list
+        while l_frame is not None:
+            try:
+                frame_meta = pyds.NvDsFrameMeta.cast(l_frame.data)
+            except StopIteration:
+                break
+
+            now_mono = time.monotonic()
+            if now_mono < self._next_preview_at:
+                try:
+                    l_frame = l_frame.next
+                except StopIteration:
+                    break
+                continue
+
+            # Do the expensive GPU-surface -> CPU copy and JPEG conversion only
+            # when the preview is due for refresh, rather than on every frame.
+            frame = pyds.get_nvds_buf_surface(hash(gst_buffer), frame_meta.batch_id)
+            frame_copy = np.array(frame, copy=True, order="C")
+            frame_copy = cv2.cvtColor(frame_copy, cv2.COLOR_RGBA2BGR)
+
+            # The preview retains the detection/status overlay and timestamp.
+            timestamp = time.strftime("%Y/%m/%d %H:%M:%S", time.localtime())
+            cv2.putText(
+                frame_copy, timestamp, (10, 30), cv2.FONT_HERSHEY_SIMPLEX,
+                1, (255, 255, 255), 2, cv2.LINE_AA,
             )
-            text_params.x_offset = 10
-            text_params.y_offset = 12
-            text_params.font_params.font_name = "Serif"
-            text_params.font_params.font_size = 10
-            text_params.font_params.font_color.set(1.0, 1.0, 1.0, 1.0)
-            text_params.set_bg_clr = 1
-            text_params.text_bg_clr.set(0.0, 0.0, 0.0, 1.0)
-            pyds.nvds_add_display_meta_to_frame(frame_meta, display_meta)
+            ret, jpeg = cv2.imencode(
+                ".jpg", frame_copy,
+                [int(cv2.IMWRITE_JPEG_QUALITY), 75],
+            )
+            if ret:
+                with self._jpeg_lock:
+                    self._latest_jpeg = jpeg.tobytes()
+            self._next_preview_at = now_mono + self._preview_interval
 
             try:
                 l_frame = l_frame.next
