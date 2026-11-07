@@ -8,12 +8,37 @@ function setPreviewBySnoozeState(container, snoozing) {
   if (!streamSrc || !snoozeSrc) return;
 
   if (snoozing) {
+    preview.dataset.sleeping = "true";
+    clearTimeout(preview.homeFrameTimer);
     preview.src = snoozeSrc;
     preview.alt = "小猪睡觉中";
   } else {
-    preview.src = streamSrc;
+    preview.dataset.sleeping = "false";
+    preview.src = preview.dataset.frameSrc || streamSrc;
     preview.alt = "实时画面";
   }
+}
+
+function startHomeCameraFrameRefresh(preview, frameUrl) {
+  const refresh = (delay) => {
+    clearTimeout(preview.homeFrameTimer);
+    preview.homeFrameTimer = setTimeout(() => {
+      if (document.hidden) {
+        refresh(1000);
+        return;
+      }
+      preview.src = `${frameUrl}${frameUrl.includes("?") ? "&" : "?"}_=${Date.now()}`;
+    }, delay);
+  };
+  preview.addEventListener("load", () => {
+    if (preview.dataset.sleeping !== "true") refresh(700);
+  });
+  preview.addEventListener("error", () => {
+    if (preview.dataset.sleeping !== "true") refresh(1800);
+  });
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden && preview.isConnected && preview.dataset.sleeping !== "true") refresh(0);
+  });
 }
 
 function formatLastFrameText(lastFrameIso, ageSeconds) {
@@ -28,18 +53,20 @@ function formatLastFrameText(lastFrameIso, ageSeconds) {
 function buildHomeCameraUrls(cameraId) {
   const config = document.querySelector("[data-role='home-camera-config']");
   const streamPrefix = config?.dataset.streamPrefix || "";
+  const framePrefix = config?.dataset.framePrefix || streamPrefix;
   const detailPrefix = config?.dataset.detailPrefix || "";
   const snoozeImage = config?.dataset.snoozeImage || "";
   const encodedId = encodeURIComponent(cameraId || "");
   return {
     streamUrl: streamPrefix.replace("__camera_id__", encodedId),
+    frameUrl: framePrefix.replace("__camera_id__", encodedId),
     detailUrl: detailPrefix.replace("__camera_id__", encodedId),
     snoozeImage,
   };
 }
 
 function createHomeCameraCard(camera) {
-  const { streamUrl, detailUrl, snoozeImage } = buildHomeCameraUrls(camera.camera_id);
+  const { streamUrl, frameUrl, detailUrl, snoozeImage } = buildHomeCameraUrls(camera.camera_id);
   const card = document.createElement("section");
   card.className = "card";
   card.dataset.cameraId = camera.camera_id;
@@ -75,8 +102,11 @@ function createHomeCameraCard(camera) {
   title.textContent = camera.camera_name || camera.camera_id || "未命名摄像头";
   device.textContent = camera.device || "";
   preview.dataset.streamSrc = streamUrl;
+  preview.dataset.frameSrc = frameUrl;
   preview.dataset.snoozeSrc = snoozeImage;
-  preview.src = camera.snoozing ? snoozeImage : streamUrl;
+  preview.dataset.sleeping = String(Boolean(camera.snoozing));
+  preview.src = camera.snoozing ? snoozeImage : frameUrl;
+  if (!camera.snoozing) startHomeCameraFrameRefresh(preview, frameUrl);
   preview.alt = camera.snoozing ? "小猪睡觉中" : (camera.camera_name || "实时画面");
   lastFrame.textContent = formatLastFrameText(camera.last_frame_time, camera.last_frame_age_seconds);
   runningStatus.textContent = `状态: ${camera.running ? "运行中" : "停止"}`;
@@ -356,7 +386,15 @@ document.addEventListener("click", async (event) => {
   const cameraId = target.dataset.id || document.getElementById("config-form")?.dataset.id;
 
   if (cameraId && target.matches("[data-action='snapshot']")) {
-    const response = await fetch(`/api/cameras/${cameraId}/snapshot`, { method: "POST" });
+    let response;
+    try {
+      response = await fetch(`/api/cameras/${cameraId}/snapshot`, { method: "POST" });
+    } catch (_error) {
+      const card = target.closest(".card");
+      const status = document.getElementById("snapshot-status") || card?.querySelector("[data-role='snapshot-status']");
+      if (status) status.textContent = "抓拍请求失败";
+      return;
+    }
     let status = document.getElementById("snapshot-status");
     if (!status) {
       const card = target.closest(".card");
@@ -975,19 +1013,26 @@ if (uploaderForm) {
     const grid = document.getElementById("uploader-grid");
 
     let okCount = 0;
+    let duplicateCount = 0;
     let failCount = 0;
     for (let i = 0; i < files.length; i += 1) {
       const file = files[i];
       if (status) status.textContent = `正在投喂 ${i + 1}/${files.length}: ${file.name}`;
       const payload = new FormData();
       payload.append("file", file);
+      payload.append("client_last_modified_ms", String(file.lastModified || ""));
       const response = await fetch("/api/uploader/upload", {
         method: "POST",
         body: payload,
       });
       const data = await response.json();
       if (!response.ok) {
-        failCount += 1;
+        if (data.duplicate) duplicateCount += 1;
+        else failCount += 1;
+        continue;
+      }
+      if (data.duplicate) {
+        duplicateCount += 1;
         continue;
       }
       okCount += 1;
@@ -996,7 +1041,7 @@ if (uploaderForm) {
       }
     }
 
-    if (status) status.textContent = `投喂完成：成功 ${okCount} 个，失败 ${failCount} 个`;
+    if (status) status.textContent = `投喂完成：新增 ${okCount} 个，重复忽略 ${duplicateCount} 个，失败 ${failCount} 个`;
     const url = new URL(window.location.href);
     url.searchParams.set("page", "1");
     window.location.href = url.toString();
@@ -1011,6 +1056,8 @@ if (uploaderForm) {
         if (status) status.textContent = "未选择文件";
         return;
       }
+      const selectionStatus = document.getElementById("uploader-selection-status");
+      if (selectionStatus) selectionStatus.textContent = `已选择 ${files.length} 个媒体，正在逐个检查并上传...`;
       await uploadSelectedFiles(files);
       input.value = "";
     });

@@ -1,4 +1,5 @@
 import yaml
+import hashlib
 import os
 import datetime
 import re
@@ -689,6 +690,23 @@ def upload_media():
     generated = media_library.generate_storage_path(ext)
     file.save(generated["abs_path"])
     size_bytes = os.path.getsize(generated["abs_path"])
+    digest = hashlib.sha256()
+    with open(generated["abs_path"], "rb") as uploaded_file:
+        for chunk in iter(lambda: uploaded_file.read(1024 * 1024), b""):
+            digest.update(chunk)
+    content_hash = digest.hexdigest()
+    duplicate = media_library.find_active_duplicate(content_hash)
+    if duplicate:
+        os.remove(generated["abs_path"])
+        return jsonify(
+            {
+                "status": "duplicate",
+                "duplicate": True,
+                "duplicate_of": duplicate,
+                "original_name": original_name,
+                "size_bytes": size_bytes,
+            }
+        )
     media_type = "image" if ext in IMAGE_EXTENSIONS else "video"
     media_url = url_for("dashboard.uploaded_media", filename=generated["rel_path"])
     poster_path = None
@@ -730,10 +748,12 @@ def upload_media():
         latitude=latitude,
         longitude=longitude,
         location_text=location_text,
+        content_hash=content_hash,
     )
     return jsonify(
         {
             "status": "ok",
+            "duplicate": False,
             "id": media_id,
             "original_name": normalized_name,
             "media_type": media_type,
@@ -748,6 +768,20 @@ def upload_media():
             "location_text": location_text,
         }
     )
+
+
+@api_bp.post("/uploader/check-duplicates")
+def check_upload_duplicates():
+    media_library, error = _get_media_library_or_error()
+    if error:
+        return error
+    payload = request.get_json(silent=True) or {}
+    hashes = payload.get("hashes")
+    if not isinstance(hashes, list):
+        return _bad_request("hashes must be an array")
+    hashes = [item.strip().lower() for item in hashes if isinstance(item, str)]
+    duplicates = media_library.find_active_duplicates(hashes)
+    return jsonify({"duplicates": duplicates, "duplicate_count": len(duplicates)})
 
 
 @api_bp.post("/uploader/media/<int:media_id>/fix-captured-at")

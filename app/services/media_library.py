@@ -1,4 +1,5 @@
 import datetime
+import hashlib
 import os
 import shutil
 import sqlite3
@@ -96,6 +97,9 @@ class MediaLibrary:
                 conn.execute("ALTER TABLE media ADD COLUMN deleted_at TEXT")
             if "purge_at" not in columns:
                 conn.execute("ALTER TABLE media ADD COLUMN purge_at TEXT")
+            if "content_hash" not in columns:
+                conn.execute("ALTER TABLE media ADD COLUMN content_hash TEXT")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_media_content_hash ON media(content_hash)")
             feedback_columns = [row[1] for row in conn.execute("PRAGMA table_info(feedback_notes)").fetchall()]
             if "auto_upgraded_at" not in feedback_columns:
                 conn.execute("ALTER TABLE feedback_notes ADD COLUMN auto_upgraded_at TEXT")
@@ -106,6 +110,56 @@ class MediaLibrary:
             conn.commit()
         finally:
             conn.close()
+
+    def find_active_duplicate(self, content_hash: str) -> Optional[Dict]:
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        try:
+            row = conn.execute(
+                "SELECT id, original_name, storage_path FROM media "
+                "WHERE content_hash = ? AND deleted_at IS NULL LIMIT 1",
+                (content_hash,),
+            ).fetchone()
+            if row:
+                return dict(row)
+
+            # Existing media predating hash-based deduplication is checked on
+            # demand, so the first repeated upload is not saved a second time.
+            legacy_rows = conn.execute(
+                "SELECT id, original_name, storage_path FROM media "
+                "WHERE content_hash IS NULL AND deleted_at IS NULL"
+            ).fetchall()
+            for legacy in legacy_rows:
+                path = os.path.join(self.uploads_dir, legacy["storage_path"])
+                if not os.path.isfile(path):
+                    continue
+                digest = hashlib.sha256()
+                try:
+                    with open(path, "rb") as source:
+                        for chunk in iter(lambda: source.read(1024 * 1024), b""):
+                            digest.update(chunk)
+                except OSError:
+                    continue
+                legacy_hash = digest.hexdigest()
+                conn.execute(
+                    "UPDATE media SET content_hash = ? WHERE id = ? AND content_hash IS NULL",
+                    (legacy_hash, legacy["id"]),
+                )
+                if legacy_hash == content_hash:
+                    conn.commit()
+                    return dict(legacy)
+            conn.commit()
+            return None
+        finally:
+            conn.close()
+
+    def find_active_duplicates(self, content_hashes: List[str]) -> Dict[str, Dict]:
+        result: Dict[str, Dict] = {}
+        for content_hash in content_hashes:
+            duplicate = self.find_active_duplicate(content_hash)
+            if duplicate:
+                result[content_hash] = duplicate
+        return result
 
     def update_media_captured_at(self, media_id: int, captured_at: str) -> Dict:
         conn = sqlite3.connect(self.db_path)
@@ -151,6 +205,7 @@ class MediaLibrary:
         latitude: float = None,
         longitude: float = None,
         location_text: str = None,
+        content_hash: str = None,
     ) -> int:
         conn = sqlite3.connect(self.db_path)
         try:
@@ -159,8 +214,8 @@ class MediaLibrary:
                 INSERT INTO media (
                     original_name, stored_name, ext, mime_type, size_bytes,
                     media_type, storage_path, media_url, poster_path, poster_url, captured_at,
-                    latitude, longitude, location_text, deleted_at, purge_at, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?)
+                    latitude, longitude, location_text, content_hash, deleted_at, purge_at, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?)
                 """,
                 (
                     original_name,
@@ -177,6 +232,7 @@ class MediaLibrary:
                     latitude,
                     longitude,
                     location_text,
+                    content_hash,
                     datetime.datetime.now().isoformat(),
                 ),
             )

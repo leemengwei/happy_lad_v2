@@ -33,6 +33,7 @@
 <div
   data-role="home-camera-config"
   data-stream-prefix="{{ url_for('dashboard.camera_stream', camera_id='__camera_id__') }}"
+  data-frame-prefix="{{ url_for('dashboard.camera_frame', camera_id='__camera_id__') }}"
   data-detail-prefix="{{ url_for('dashboard.camera_detail', camera_id='__camera_id__') }}"
   data-snooze-image="{{ url_for('static', filename='img/sleepy-pig.svg') }}"
   style="display: none;"

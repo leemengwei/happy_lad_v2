@@ -322,7 +322,26 @@ def camera_stream(camera_id: str):
                 )
             time.sleep(0.1)
 
-    return Response(generate(), mimetype="multipart/x-mixed-replace; boundary=frame")
+    response = Response(generate(), mimetype="multipart/x-mixed-replace; boundary=frame")
+    response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    response.headers["X-Accel-Buffering"] = "no"
+    return response
+
+
+@dashboard_bp.route("/frame/<camera_id>")
+def camera_frame(camera_id: str):
+    """Return one JPEG so mobile browsers can refresh previews without MJPEG."""
+    manager = _get_manager()
+    if camera_id not in manager.pipelines:
+        abort(404)
+    frame = manager.get_pipeline(camera_id).get_latest_jpeg()
+    if not frame:
+        return Response(status=204, headers={"Cache-Control": "no-store"})
+    return Response(
+        frame,
+        mimetype="image/jpeg",
+        headers={"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0"},
+    )
 
 
 @dashboard_bp.route("/media/<camera_id>/<path:filename>")
