@@ -2,6 +2,8 @@ import os
 import datetime
 import logging
 import cv2
+import re
+import uuid
 from typing import List
 
 logger = logging.getLogger(__name__)
@@ -13,13 +15,16 @@ class Storage:
         os.makedirs(self.base_dir, exist_ok=True)
 
     def save_sample(self, frame, camera_name: str) -> str:
-        timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-        filename = f"{camera_name}_{timestamp}.jpg"
+        safe_name = re.sub(r"[^A-Za-z0-9_.-]+", "_", str(camera_name)).strip("._") or "camera"
+        timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S-%f")
+        filename = f"{safe_name}_{timestamp}_{uuid.uuid4().hex[:8]}.jpg"
         path = os.path.join(self.base_dir, filename)
-        cv2.imwrite(path, frame)
+        if not cv2.imwrite(path, frame):
+            raise OSError(f"failed to encode/write snapshot: {path}")
 
         latest_path = os.path.join(self.base_dir, "latest.jpg")
-        cv2.imwrite(latest_path, frame)
+        if not cv2.imwrite(latest_path, frame):
+            logger.warning("Failed to update latest snapshot: %s", latest_path)
         logger.info("Saved snapshot: %s", path)
         return path
 

@@ -4,12 +4,17 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>{{ title or 'Happy Lad v2' }}</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/app.css') }}" />
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/app.css', v='20261107-bg6') }}" />
   </head>
   <body>
+    <div class="site-background" data-role="site-background" data-api-url="http://192.168.0.100:5000/api/site/background" aria-hidden="true"></div>
+    <div class="site-romance" aria-hidden="true">
+      <span>♡</span><span>✦</span><span>♡</span><span>✧</span><span>♡</span><span>✦</span>
+    </div>
     <header class="navbar">
       <div class="logo">Happy Lad v2</div>
       <nav>
+        <button class="nav-background-button" type="button" data-action="background-open">背景布置</button>
         <a href="{{ url_for('dashboard.diagnostics') }}">诊断</a>
         <a href="{{ url_for('dashboard.feedback_board') }}">意见板</a>
       </nav>
@@ -17,6 +22,25 @@
     <main class="container">
       {% block content %}{% endblock %}
     </main>
+    <dialog class="background-dialog" data-role="background-dialog" aria-labelledby="background-dialog-title">
+      <form method="dialog" class="background-dialog-header">
+        <div>
+          <h2 id="background-dialog-title">布置快乐家园</h2>
+          <p class="muted">选一张喜欢的照片，柔焦后铺满所有页面。</p>
+        </div>
+        <button class="background-dialog-close" type="submit" aria-label="关闭">×</button>
+      </form>
+      <div class="background-preview" data-role="background-preview">
+        <span>还没有选择背景图片</span>
+      </div>
+      <label class="btn background-choose" for="site-background-input">选择一张图片</label>
+      <input id="site-background-input" class="visually-hidden" type="file" accept="image/*" data-role="background-input" />
+      <div class="background-dialog-status muted" data-role="background-status" aria-live="polite">设置保存在主站，并与相册页面共享。</div>
+      <div class="background-dialog-actions">
+        <button class="btn secondary" type="button" data-action="background-reset">恢复默认背景</button>
+        <button class="btn" type="button" data-action="background-close">完成</button>
+      </div>
+    </dialog>
     <script src="{{ url_for('static', filename='js/dashboard.js') }}"></script>
   </body>
 </html>

@@ -1,5 +1,6 @@
 import yaml
 import hashlib
+import io
 import os
 import datetime
 import re
@@ -11,11 +12,13 @@ import time
 from flask import Blueprint, current_app, jsonify, request, url_for, send_from_directory
 from werkzeug.utils import secure_filename
 from PIL import Image, ExifTags
+from pillow_heif import register_heif_opener
 import cv2
 
 from app.services.sampling import SamplingPolicy
 
 api_bp = Blueprint("api", __name__)
+register_heif_opener()
 FEEDBACK_AUTO_UPGRADE_LOCK = threading.Lock()
 FEEDBACK_AUTO_UPGRADE_STATE_LOCK = threading.Lock()
 FEEDBACK_AUTO_UPGRADE_STATE = {
@@ -265,7 +268,10 @@ def _parse_flexible_datetime(value: str):
     normalized = raw.replace("Z", "+00:00")
     for sep in ("T", " "):
         try:
-            return datetime.datetime.fromisoformat(normalized.replace("T", sep, 1)).isoformat()
+            parsed = datetime.datetime.fromisoformat(normalized.replace("T", sep, 1))
+            if parsed.tzinfo is not None:
+                parsed = parsed.astimezone().replace(tzinfo=None)
+            return parsed.isoformat()
         except Exception:
             continue
     return None
@@ -287,7 +293,108 @@ def _extract_xmp_datetime(img: Image.Image):
     return None
 
 
-def _extract_captured_at(abs_path: str, ext: str, media_type: str):
+def _parse_client_last_modified(value, reference_time: datetime.datetime):
+    try:
+        millis = float(value)
+        if not 0 < millis < 4102444800000:  # 2100-01-01
+            return None
+        parsed = datetime.datetime.fromtimestamp(millis / 1000.0)
+    except (TypeError, ValueError, OverflowError, OSError):
+        return None
+    if parsed.year < 1980 or parsed > reference_time + datetime.timedelta(minutes=5):
+        return None
+    # iOS may create a temporary export file when sharing an asset. If its
+    # mtime is effectively the upload time, don't mistake that for capture.
+    if abs((reference_time - parsed).total_seconds()) <= 120:
+        return None
+    return parsed.isoformat()
+
+
+def _parse_filename_capture_time(original_name: str):
+    match = re.match(
+        r"^(20\d{2})[_-](\d{2})[_-](\d{2})[_-](\d{2})[_-](\d{2})[_-](\d{2})(?:[_-])",
+        original_name or "",
+    )
+    if not match:
+        return None
+    try:
+        return datetime.datetime.strptime("_".join(match.groups()), "%Y_%m_%d_%H_%M_%S").isoformat()
+    except ValueError:
+        return None
+
+
+def _read_video_metadata_bytes(abs_path: str):
+    # QuickTime's moov atom is commonly at either end. Read bounded windows so
+    # metadata fallback doesn't load a multi-gigabyte video into memory.
+    with open(abs_path, "rb") as source:
+        size = os.fstat(source.fileno()).st_size
+        head = source.read(min(size, 8 * 1024 * 1024))
+        if size <= 8 * 1024 * 1024:
+            return head
+        source.seek(max(0, size - 16 * 1024 * 1024))
+        return head + source.read(16 * 1024 * 1024)
+
+
+def _extract_raw_video_datetime(abs_path: str):
+    try:
+        payload = _read_video_metadata_bytes(abs_path)
+    except OSError:
+        return None
+    date_pattern = rb"(\d{4}-\d\d-\d\d[T ]\d\d:\d\d:\d\d(?:\.\d+)?(?:Z|[+-]\d\d:\d\d)?)"
+    for marker in (b"com.apple.quicktime.creationdate", b"creation_time"):
+        offset = payload.lower().find(marker.lower())
+        if offset >= 0:
+            match = re.search(date_pattern, payload[offset : offset + 4096])
+            if match:
+                parsed = _parse_flexible_datetime(match.group(1).decode("ascii"))
+                if parsed:
+                    return parsed
+    return None
+
+
+def _extract_quicktime_header_datetime(abs_path: str, reference_time: datetime.datetime):
+    try:
+        payload = _read_video_metadata_bytes(abs_path)
+    except OSError:
+        return None
+    offset = payload.find(b"mvhd")
+    if offset < 4 or offset + 16 > len(payload):
+        return None
+    version = payload[offset + 4]
+    if version == 0:
+        seconds = int.from_bytes(payload[offset + 8 : offset + 12], "big")
+    elif version == 1 and offset + 24 <= len(payload):
+        seconds = int.from_bytes(payload[offset + 8 : offset + 16], "big")
+    else:
+        return None
+    if seconds <= 0:
+        return None
+    try:
+        parsed = (
+            datetime.datetime(1904, 1, 1, tzinfo=datetime.timezone.utc)
+            + datetime.timedelta(seconds=seconds)
+        ).astimezone().replace(tzinfo=None)
+    except (OverflowError, OSError, ValueError):
+        return None
+    if parsed.year < 1980 or parsed > reference_time + datetime.timedelta(minutes=5):
+        return None
+    # Remuxers rewrite mvhd at export/upload time; reject timestamps close to
+    # receipt and let the browser timestamp or upload-time fallback take over.
+    if abs((reference_time - parsed).total_seconds()) <= 120:
+        return None
+    return parsed.isoformat()
+
+
+def _extract_captured_at(
+    abs_path: str,
+    ext: str,
+    media_type: str,
+    *,
+    client_last_modified=None,
+    original_name: str = "",
+):
+    reference_time = datetime.datetime.now()
+    captured_at = None
     if media_type == "video":
         try:
             cmd = [
@@ -307,31 +414,52 @@ def _extract_captured_at(abs_path: str, ext: str, media_type: str):
                     continue
                 parsed = _parse_flexible_datetime(match.group(1))
                 if parsed:
-                    return parsed
+                    # creation_time often mirrors the QuickTime mvhd export
+                    # time. Explicit Apple capture-date tags remain preferred.
+                    label = match.group(0).split(":", 1)[0].lower()
+                    if label != "creation_time" or abs(
+                        (reference_time - datetime.datetime.fromisoformat(parsed)).total_seconds()
+                    ) > 120:
+                        captured_at = parsed
+                        break
         except Exception:
-            return None
-        return None
-    if media_type != "image":
-        return None
-    try:
-        with Image.open(abs_path) as img:
-            exif = img.getexif()
-            exif_by_name = {}
-            if exif:
-                for tag_id, raw in exif.items():
-                    tag_name = ExifTags.TAGS.get(tag_id, str(tag_id))
-                    if tag_name in EXIF_DATETIME_KEYS:
-                        exif_by_name[tag_name] = raw
-                for key in EXIF_DATETIME_PRIORITY:
-                    parsed = _parse_exif_datetime(exif_by_name.get(key))
-                    if parsed:
-                        return parsed
-            xmp_parsed = _extract_xmp_datetime(img)
-            if xmp_parsed:
-                return xmp_parsed
-    except Exception:
-        return None
-    return None
+            pass
+        if not captured_at:
+            captured_at = _extract_raw_video_datetime(abs_path)
+        if not captured_at:
+            captured_at = _extract_quicktime_header_datetime(abs_path, reference_time)
+    elif media_type == "image":
+        try:
+            with Image.open(abs_path) as img:
+                exif = img.getexif()
+                exif_by_name = {}
+                if exif:
+                    exif_ifds = [exif]
+                    try:
+                        exif_ifds.append(exif.get_ifd(0x8769))
+                    except Exception:
+                        pass
+                    for exif_ifd in exif_ifds:
+                        for tag_id, raw in exif_ifd.items():
+                            tag_name = ExifTags.TAGS.get(tag_id, str(tag_id))
+                            if tag_name in EXIF_DATETIME_KEYS:
+                                exif_by_name[tag_name] = raw
+                    for key in EXIF_DATETIME_PRIORITY:
+                        parsed = _parse_exif_datetime(exif_by_name.get(key))
+                        if parsed:
+                            captured_at = parsed
+                            break
+                xmp_parsed = _extract_xmp_datetime(img)
+                if not captured_at and xmp_parsed:
+                    captured_at = xmp_parsed
+        except Exception:
+            captured_at = None
+    if captured_at:
+        return captured_at
+    client_time = _parse_client_last_modified(client_last_modified, reference_time)
+    if client_time:
+        return client_time
+    return _parse_filename_capture_time(original_name)
 
 
 def _ratio_to_float(value):
@@ -502,7 +630,16 @@ def force_snapshot(camera_id: str):
     if error:
         return error
     pipeline.force_snapshot()
-    return jsonify({"status": "ok"})
+    # Do not report success before the asynchronous probe has actually saved
+    # the image. This also makes disk/format failures visible to the caller.
+    deadline = time.monotonic() + 5.0
+    capture = pipeline.get_capture_status()
+    while capture and capture.get("error") == "pending" and time.monotonic() < deadline:
+        time.sleep(0.05)
+        capture = pipeline.get_capture_status()
+    if capture and capture.get("ok"):
+        return jsonify({"status": "ok", "capture": capture})
+    return jsonify({"status": "failed", "capture": capture or {"error": "timeout"}}), 504
 
 
 @api_bp.post("/cameras/<camera_id>/snooze")
@@ -635,8 +772,11 @@ def health_status():
     stale = [
         item["camera_id"]
         for item in statuses
-        if item.get("last_frame_age_seconds") is not None
-        and item["last_frame_age_seconds"] > stale_threshold_seconds
+        if (
+            not item.get("running")
+            or item.get("last_frame_age_seconds") is None
+            or item["last_frame_age_seconds"] > stale_threshold_seconds
+        )
     ]
     return jsonify(
         {
@@ -713,7 +853,13 @@ def upload_media():
     poster_url = None
     if media_type == "video":
         poster_path, poster_url = _generate_video_poster(generated["abs_path"], generated["rel_path"])
-    captured_at = _extract_captured_at(generated["abs_path"], ext, media_type)
+    captured_at = _extract_captured_at(
+        generated["abs_path"],
+        ext,
+        media_type,
+        client_last_modified=request.form.get("client_last_modified_ms"),
+        original_name=original_name,
+    )
     latitude, longitude, location_text = _extract_image_location(generated["abs_path"], media_type)
     manual_latitude = request.form.get("latitude")
     manual_longitude = request.form.get("longitude")
@@ -990,6 +1136,103 @@ def list_uploaded_media():
             "sort_order": result["sort_order"],
         }
     )
+
+
+SITE_BACKGROUND_FORMATS = {
+    "JPEG": "jpg",
+    "PNG": "png",
+    "WEBP": "webp",
+    "GIF": "gif",
+}
+SITE_BACKGROUND_MIMES = {
+    "jpg": "image/jpeg",
+    "png": "image/png",
+    "webp": "image/webp",
+    "gif": "image/gif",
+}
+SITE_BACKGROUND_ORIGINS = {
+    "http://192.168.0.100:5000",
+    "http://192.168.0.110:5001",
+    "http://127.0.0.1:5000",
+    "http://localhost:5000",
+}
+
+
+def _site_background_dir():
+    path = os.path.abspath(os.path.join(current_app.root_path, "..", "data", "site_background"))
+    os.makedirs(path, exist_ok=True)
+    return path
+
+
+@api_bp.route("/site/background", methods=["GET", "POST"])
+def site_background():
+    background_dir = _site_background_dir()
+    if request.method == "GET":
+        for extension, mime_type in SITE_BACKGROUND_MIMES.items():
+            filename = f"background.{extension}"
+            if os.path.isfile(os.path.join(background_dir, filename)):
+                return send_from_directory(background_dir, filename, mimetype=mime_type, max_age=0)
+        return jsonify({"background": None}), 404
+
+    origin = request.headers.get("Origin")
+    if origin and origin not in SITE_BACKGROUND_ORIGINS:
+        return jsonify({"error": "不允许从此网页修改背景。"}), 403
+
+    if request.form.get("action") == "clear":
+        for extension in ("jpg", "png", "webp", "gif"):
+            try:
+                os.remove(os.path.join(background_dir, f"background.{extension}"))
+            except FileNotFoundError:
+                pass
+        return jsonify({"background": None})
+
+    uploaded = request.files.get("image")
+    if uploaded is None or not uploaded.filename:
+        return _bad_request("请选择一张背景图片。")
+    payload = uploaded.read(30 * 1024 * 1024 + 1)
+    if not payload:
+        return _bad_request("图片文件为空。")
+    if len(payload) > 30 * 1024 * 1024:
+        return _bad_request("图片不能超过 30 MB。")
+    try:
+        image = Image.open(io.BytesIO(payload))
+        image_format = image.format
+        image.verify()
+    except Exception:
+        return _bad_request("无法读取这张图片。iPhone 照片请确认已完整下载后再试。")
+
+    extension = SITE_BACKGROUND_FORMATS.get(image_format)
+    if extension is None:
+        try:
+            image = Image.open(io.BytesIO(payload)).convert("RGB")
+            converted = io.BytesIO()
+            image.save(converted, format="JPEG", quality=90, optimize=True)
+            payload = converted.getvalue()
+            extension = "jpg"
+        except Exception:
+            return _bad_request("图片转换失败，请试试另存为 JPG 后上传。")
+
+    for old_extension in ("jpg", "png", "webp", "gif"):
+        if old_extension != extension:
+            try:
+                os.remove(os.path.join(background_dir, f"background.{old_extension}"))
+            except FileNotFoundError:
+                pass
+    with open(os.path.join(background_dir, f"background.{extension}"), "wb") as destination:
+        destination.write(payload)
+    return jsonify({"background": "saved"})
+
+
+@api_bp.after_request
+def site_background_cors(response):
+    if request.path == "/api/site/background":
+        origin = request.headers.get("Origin", "")
+        if origin in SITE_BACKGROUND_ORIGINS:
+            response.headers["Access-Control-Allow-Origin"] = origin
+            response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+            response.headers["Access-Control-Allow-Headers"] = "Content-Type"
+            response.headers["Vary"] = "Origin"
+    return response
 
 
 @api_bp.post("/uploader/delete")

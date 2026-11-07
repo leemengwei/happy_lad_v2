@@ -9,7 +9,7 @@ def create_app(pipeline_manager):
     app = Flask(__name__)
     app.secret_key = "happy_lad_v2"
     app.config["PIPELINE_MANAGER"] = pipeline_manager
-    app.config["REMOTE_ALBUM_SERVER"] = "root@192.168.0.110"
+    app.config["REMOTE_ALBUM_SERVER"] = "root@192.168.0.110"   #
     app.config["REMOTE_ALBUM_PATH"] = "/root/nvme/album_service"
 
     external_base = "/mnt/external_us/happy_lad_uploader"

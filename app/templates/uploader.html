@@ -22,7 +22,31 @@
   <div class="uploader-meta">{{ item.original_name }}</div>
 </a>
 {%- endmacro %}
-<a class="page-back" href="{{ url_for('dashboard.dashboard') }}">← 返回快乐家园</a>
+{% macro render_pager(page, total_pages, total, per_page, sort_by, sort_order) -%}
+<div class="uploader-pagination">
+  {% if page > 1 %}
+  <a class="btn secondary" href="{{ url_for('dashboard.uploader', page=page-1, per_page=per_page, sort_by=sort_by, sort_order=sort_order) }}">上一页</a>
+  {% else %}
+  <span class="btn secondary disabled-link">上一页</span>
+  {% endif %}
+  <span class="pager-text">第 {{ page }} / {{ total_pages }} 页 · 共 {{ total }} 条</span>
+  {% if page < total_pages %}
+  <a class="btn secondary" href="{{ url_for('dashboard.uploader', page=page+1, per_page=per_page, sort_by=sort_by, sort_order=sort_order) }}">下一页</a>
+  {% else %}
+  <span class="btn secondary disabled-link">下一页</span>
+  {% endif %}
+  <form method="get" class="pager-jump-form">
+    <input type="hidden" name="per_page" value="{{ per_page }}" />
+    <input type="hidden" name="sort_by" value="{{ sort_by }}" />
+    <input type="hidden" name="sort_order" value="{{ sort_order }}" />
+    <label class="pager-label">跳转到
+      <input class="pager-jump-input" type="number" name="page" min="1" max="{{ total_pages }}" value="{{ page }}" />
+    </label>
+    <button class="btn secondary" type="submit">前往</button>
+  </form>
+</div>
+{%- endmacro %}
+<a class="page-back" href="http://192.168.0.100:5000/">← 返回快乐家园</a>
 <h1>小帽子媒体上传</h1>
 {% if storage_unavailable %}
 <section class="card">
@@ -76,43 +100,28 @@
           <option value="asc" {% if sort_order == 'asc' %}selected{% endif %}>升序</option>
         </select>
       </label>
-      <label class="pager-label">当页最多
+      <label class="pager-label">每页
         <select name="per_page">
-          {% for v in [50, 100, 200, 300, 500, 1000] %}
-          <option value="{{ v }}" {% if per_page == v %}selected{% endif %}>{{ v }}</option>
+          {% for value in [50, 100, 200] %}
+          <option value="{{ value }}" {% if per_page == value %}selected{% endif %}>{{ value }} 条</option>
           {% endfor %}
         </select>
       </label>
       <button class="btn secondary" type="submit">应用</button>
     </form>
-    <div class="pager-text">第 {{ page }} / {{ total_pages }} 页 · 共 {{ total }} 条</div>
-    <div class="actions">
-      <a class="btn secondary {% if page <= 1 %}disabled-link{% endif %}" href="{{ url_for('dashboard.uploader', page=1, per_page=per_page, sort_by=sort_by, sort_order=sort_order) }}">首页</a>
-      <a class="btn secondary {% if page <= 1 %}disabled-link{% endif %}" href="{{ url_for('dashboard.uploader', page=page-1 if page>1 else 1, per_page=per_page, sort_by=sort_by, sort_order=sort_order) }}">上一页</a>
-      <a class="btn secondary {% if page >= total_pages %}disabled-link{% endif %}" href="{{ url_for('dashboard.uploader', page=page+1 if page<total_pages else total_pages, per_page=per_page, sort_by=sort_by, sort_order=sort_order) }}">下一页</a>
-      <a class="btn secondary {% if page >= total_pages %}disabled-link{% endif %}" href="{{ url_for('dashboard.uploader', page=total_pages, per_page=per_page, sort_by=sort_by, sort_order=sort_order) }}">末页</a>
-    </div>
-    <form method="get" class="pager-jump-form">
-      <input type="hidden" name="per_page" value="{{ per_page }}" />
-      <input type="hidden" name="sort_by" value="{{ sort_by }}" />
-      <input type="hidden" name="sort_order" value="{{ sort_order }}" />
-      <label class="pager-label">跳转到
-        <input class="pager-jump-input" type="number" name="page" min="1" max="{{ total_pages }}" value="{{ page }}" />
-      </label>
-      <button class="btn secondary" type="submit">跳转</button>
-    </form>
   </div>
+  {{ render_pager(page, total_pages, total, per_page, sort_by, sort_order) }}
   {% if timeline_mode %}
   <div id="uploader-grid" class="timeline-months">
     {% for month in timeline_month_groups %}
-    <details class="timeline-month" {% if loop.first %}open{% endif %}>
+    <details class="timeline-month" data-month-key="{{ month.month_key }}" data-day-count="{{ month.day_count }}" data-item-count="{{ month.item_count }}" {% if loop.first %}open{% endif %}>
       <summary class="timeline-month-summary">
         <span class="timeline-month-title">{{ month.month_label }}</span>
-        <span class="timeline-month-meta">{{ month.day_count }} 天 · {{ month.item_count }} 条</span>
+        <span class="timeline-month-meta" data-role="month-meta">{{ month.day_count }} 天 · {{ month.item_count }} 条</span>
       </summary>
       <div class="timeline-groups">
         {% for group in month.day_groups %}
-        <section class="timeline-group">
+        <section class="timeline-group" data-day-key="{{ group.day_key }}">
           <header class="timeline-group-header">
             <div class="timeline-day">{{ group.day_label }}</div>
             <div class="timeline-meta">冒冒年龄：{{ group.age_text }} · {{ group.item_count }} 条</div>
@@ -135,6 +144,7 @@
     {% endfor %}
   </div>
   {% endif %}
+  {{ render_pager(page, total_pages, total, per_page, sort_by, sort_order) }}
 </section>
 
 <div class="lightbox" data-role="uploader-lightbox" aria-hidden="true">
@@ -205,14 +215,6 @@
     </div>
     {% endfor %}
     </div>
-  </div>
-</section>
-<section class="recent">
-  <div class="actions">
-    <a class="btn secondary {% if page <= 1 %}disabled-link{% endif %}" href="{{ url_for('dashboard.uploader', page=1, per_page=per_page, sort_by=sort_by, sort_order=sort_order) }}">首页</a>
-    <a class="btn secondary {% if page <= 1 %}disabled-link{% endif %}" href="{{ url_for('dashboard.uploader', page=page-1 if page>1 else 1, per_page=per_page, sort_by=sort_by, sort_order=sort_order) }}">上一页</a>
-    <a class="btn secondary {% if page >= total_pages %}disabled-link{% endif %}" href="{{ url_for('dashboard.uploader', page=page+1 if page<total_pages else total_pages, per_page=per_page, sort_by=sort_by, sort_order=sort_order) }}">下一页</a>
-    <a class="btn secondary {% if page >= total_pages %}disabled-link{% endif %}" href="{{ url_for('dashboard.uploader', page=total_pages, per_page=per_page, sort_by=sort_by, sort_order=sort_order) }}">末页</a>
   </div>
 </section>
 {% endif %}

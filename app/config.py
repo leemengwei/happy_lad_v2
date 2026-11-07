@@ -16,7 +16,6 @@ class CameraConfig:
     device: str
     width: int
     height: int
-    fps: int
     model_config: str
     storage_dir: str
     sample_sound_file: str
@@ -54,7 +53,6 @@ def load_config(path: str) -> AppConfig:
                 device=raw["device"],
                 width=int(raw.get("width", 1920)),
                 height=int(raw.get("height", 1080)),
-                fps=int(raw.get("fps", 30)),
                 model_config=raw["model_config"],
                 storage_dir=raw["storage_dir"],
                 sample_sound_file=raw.get(

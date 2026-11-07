@@ -5,6 +5,106 @@ body {
   font-family: "Space Grotesk", "Noto Sans", sans-serif;
   background: #f6f7fb;
   color: #1f1f1f;
+  position: relative;
+  isolation: isolate;
+  min-height: 100vh;
+}
+
+html {
+  overflow-x: clip;
+}
+
+.site-background {
+  position: fixed;
+  inset: 0;
+  z-index: -2;
+  clip-path: inset(0);
+  opacity: 0;
+  background-color: #f6f7fb;
+  background-position: center;
+  background-size: cover;
+  filter: blur(9px) saturate(1.1);
+  transition: opacity 500ms ease;
+  pointer-events: none;
+}
+
+body.has-site-background .site-background {
+  opacity: 0.62;
+}
+
+body.has-site-background .navbar {
+  background: rgba(31, 42, 68, 0.84);
+  -webkit-backdrop-filter: blur(8px);
+  backdrop-filter: blur(8px);
+}
+
+body.has-site-background .card,
+body.has-site-background .panel,
+body.has-site-background .timeline-month,
+body.has-site-background .timeline-group {
+  background-color: rgba(255, 255, 255, 0.72);
+  border-radius: 12px;
+  -webkit-backdrop-filter: blur(8px);
+  backdrop-filter: blur(8px);
+}
+
+body.has-site-background .recent-grid {
+  padding: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.4);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.46);
+  -webkit-backdrop-filter: blur(8px);
+  backdrop-filter: blur(8px);
+}
+
+body.has-site-background .timeline-month-summary {
+  background: linear-gradient(180deg, rgba(238, 245, 255, 0.78), rgba(248, 251, 255, 0.68));
+}
+
+body.has-site-background .uploader-stat {
+  background: rgba(248, 250, 252, 0.72);
+  -webkit-backdrop-filter: blur(8px);
+  backdrop-filter: blur(8px);
+}
+
+.site-romance {
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  overflow: hidden;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 500ms ease;
+  background:
+    radial-gradient(ellipse at 8% 15%, rgba(255, 191, 211, 0.18), transparent 38%),
+    radial-gradient(ellipse at 88% 82%, rgba(183, 196, 255, 0.2), transparent 42%);
+}
+
+body.has-site-background .site-romance {
+  opacity: 1;
+}
+
+.site-romance span {
+  position: absolute;
+  bottom: -12vh;
+  color: rgba(255, 255, 255, 0.58);
+  font-size: clamp(16px, 2vw, 28px);
+  text-shadow: 0 0 18px rgba(255, 190, 219, 0.72);
+  animation: romantic-drift 18s linear infinite;
+}
+
+.site-romance span:nth-child(1) { left: 9%; animation-delay: -3s; }
+.site-romance span:nth-child(2) { left: 26%; font-size: 15px; animation-delay: -12s; }
+.site-romance span:nth-child(3) { left: 47%; animation-delay: -8s; }
+.site-romance span:nth-child(4) { left: 68%; font-size: 17px; animation-delay: -15s; }
+.site-romance span:nth-child(5) { left: 83%; animation-delay: -5s; }
+.site-romance span:nth-child(6) { left: 94%; font-size: 14px; animation-delay: -10s; }
+
+@keyframes romantic-drift {
+  0% { transform: translate3d(0, 0, 0) rotate(-10deg); opacity: 0; }
+  12% { opacity: 0.7; }
+  78% { opacity: 0.58; }
+  100% { transform: translate3d(24px, -120vh, 0) rotate(18deg); opacity: 0; }
 }
 
 .navbar {
@@ -20,6 +120,124 @@ body {
   color: #fff;
   text-decoration: none;
   margin-left: 12px;
+}
+
+.navbar nav {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.navbar nav a {
+  margin-left: 0;
+}
+
+.nav-background-button {
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  border-radius: 999px;
+  padding: 7px 12px;
+  color: #fff;
+  background: rgba(255, 255, 255, 0.12);
+  font: inherit;
+  cursor: pointer;
+}
+
+.nav-background-button:hover {
+  background: rgba(255, 255, 255, 0.22);
+}
+
+.background-dialog {
+  width: min(440px, calc(100vw - 36px));
+  padding: 20px;
+  border: 1px solid rgba(255, 255, 255, 0.72);
+  border-radius: 20px;
+  color: #25243a;
+  background: rgba(255, 250, 253, 0.96);
+  box-shadow: 0 24px 80px rgba(43, 35, 74, 0.28);
+  backdrop-filter: blur(18px);
+}
+
+.background-dialog::backdrop {
+  background: rgba(27, 31, 55, 0.38);
+  backdrop-filter: blur(5px);
+}
+
+.background-dialog-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.background-dialog-header h2 {
+  margin: 0 0 5px;
+}
+
+.background-dialog-header p {
+  margin: 0 0 16px;
+}
+
+.background-dialog-close {
+  border: 0;
+  background: transparent;
+  color: #66647a;
+  font-size: 28px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.background-preview {
+  display: grid;
+  place-items: center;
+  min-height: 150px;
+  margin-bottom: 14px;
+  overflow: hidden;
+  border: 1px solid #e9dfeb;
+  border-radius: 14px;
+  color: #777186;
+  background: linear-gradient(135deg, #f9eaf1, #eceeff 55%, #fff8e9);
+}
+
+.background-preview img {
+  display: block;
+  width: 100%;
+  max-height: 240px;
+  object-fit: cover;
+}
+
+.background-choose {
+  display: inline-flex;
+  margin: 0;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.background-dialog-status {
+  min-height: 1.4em;
+  margin-top: 10px;
+}
+
+.background-dialog-actions {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 18px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .site-romance span {
+    animation: none;
+  }
 }
 
 .container {
@@ -457,6 +675,18 @@ body {
   gap: 10px;
   align-items: center;
   flex-wrap: wrap;
+}
+
+.uploader-pagination {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 10px 0 14px;
+}
+
+.uploader-pagination .disabled-link {
+  cursor: default;
 }
 
 .pager-label {
@@ -1060,4 +1290,42 @@ body {
     top: 52px;
     bottom: 210px;
   }
+}
+
+/* Semi-transparent backing for each album thumbnail and caption. */
+body.has-site-background .recent-item {
+  padding: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.42);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.38);
+  -webkit-backdrop-filter: blur(6px);
+  backdrop-filter: blur(6px);
+}
+
+body.has-site-background .recent-item:hover {
+  background: rgba(255, 255, 255, 0.54);
+  box-shadow: 0 6px 18px rgba(31, 42, 68, 0.12);
+}
+
+/* Keep the album glass layers visibly transparent instead of stacking opaque white panels. */
+body.has-site-background .timeline-month,
+body.has-site-background .timeline-group {
+  background-color: rgba(255, 255, 255, 0.20);
+}
+
+body.has-site-background .recent-grid {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.26);
+}
+
+body.has-site-background .timeline-month-summary {
+  background: linear-gradient(180deg, rgba(238, 245, 255, 0.32), rgba(248, 251, 255, 0.20));
+}
+
+body.has-site-background .recent-item {
+  background: rgba(255, 255, 255, 0.25);
+}
+
+body.has-site-background .recent-item:hover {
+  background: rgba(255, 255, 255, 0.40);
 }

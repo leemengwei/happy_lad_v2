@@ -278,7 +278,24 @@ def ensure_home_posters(items):
 
 @dashboard.get('/')
 def uploader():
-    result=library.list_media_paginated(page=max(1,int(request.args.get('page',1))), per_page=min(1000,max(20,int(request.args.get('per_page',50)))), sort_by=request.args.get('sort_by','captured'), sort_order=request.args.get('sort_order','desc'))
+    try:
+        page = max(1, int(request.args.get('page', 1)))
+    except (TypeError, ValueError):
+        page = 1
+    try:
+        per_page = int(request.args.get('per_page', 100))
+    except (TypeError, ValueError):
+        per_page = 100
+    per_page = max(50, min(per_page, 200))
+    sort_by = request.args.get('sort_by', 'captured')
+    sort_order = request.args.get('sort_order', 'desc')
+    result = library.list_media_paginated(
+        page=page, per_page=per_page, sort_by=sort_by, sort_order=sort_order)
+    total_pages = max(1, (result['total'] + result['per_page'] - 1) // result['per_page'])
+    page = min(page, total_pages)
+    if page != result['page']:
+        result = library.list_media_paginated(
+            page=page, per_page=per_page, sort_by=sort_by, sort_order=sort_order)
     items=result['items']; trash=library.list_trash(limit=120); stats=library.get_storage_stats()
     for x in items+trash:
         media_urls(x)
@@ -292,8 +309,7 @@ def uploader():
         key=g['day_key'][:7] if g['day_key'] != '未知日期' else '未知月份'
         if not months or months[-1]['month_key'] != key: months.append({'month_key':key,'month_label':key,'day_groups':[],'item_count':0,'day_count':0})
         months[-1]['day_groups'].append(g); months[-1]['item_count']+=g['item_count']; months[-1]['day_count']+=1
-    total_pages=max(1,(result['total']+result['per_page']-1)//result['per_page'])
-    return render_template('uploader.html', media_items=items, timeline_mode=result['sort_by']=='captured', timeline_groups=groups, timeline_month_groups=months, trash_items=trash, total=result['total'], baby_birthday_text='2026-06-29', today_age_text=age_text(datetime.date.today().isoformat()), stats=stats, stats_text={k:fmt(stats[src]) for k,src in [('image_bytes','image_bytes'),('video_bytes','video_bytes'),('total_bytes','total_bytes'),('disk_free_bytes','disk_free_bytes')]}, page=result['page'], per_page=result['per_page'], total_pages=total_pages, sort_by=result['sort_by'], sort_order=result['sort_order'])
+    return render_template('uploader.html', media_items=items, timeline_mode=result['sort_by']=='captured', timeline_groups=groups, timeline_month_groups=months, trash_items=trash, total=result['total'], baby_birthday_text='2026-06-29', today_age_text=age_text(datetime.date.today().isoformat()), stats=stats, stats_text={k:fmt(stats[src]) for k,src in [('image_bytes','image_bytes'),('video_bytes','video_bytes'),('total_bytes','total_bytes'),('disk_free_bytes','disk_free_bytes')]}, page=page, per_page=result['per_page'], total_pages=total_pages, sort_by=result['sort_by'], sort_order=result['sort_order'])
 
 @dashboard.get('/uploads/<path:filename>')
 def uploaded_media(filename): return send_from_directory(str(UPLOADS), filename)

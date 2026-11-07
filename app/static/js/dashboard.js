@@ -1252,3 +1252,108 @@ loadHomeDashboardSections();
 refreshDashboardStatus();
 setInterval(refreshDashboardStatus, 5000);
 rebuildUploaderLightboxItems();
+
+let siteBackgroundObjectUrl = null;
+
+function applySiteBackground(blob) {
+  const backdrop = document.querySelector("[data-role='site-background']");
+  const preview = document.querySelector("[data-role='background-preview']");
+  if (!backdrop) return;
+  if (siteBackgroundObjectUrl) URL.revokeObjectURL(siteBackgroundObjectUrl);
+  siteBackgroundObjectUrl = null;
+  if (!blob) {
+    backdrop.style.backgroundImage = "";
+    document.body.classList.remove("has-site-background");
+    if (preview) preview.innerHTML = "<span>还没有选择背景图片</span>";
+    return;
+  }
+  siteBackgroundObjectUrl = URL.createObjectURL(blob);
+  backdrop.style.backgroundImage = `url("${siteBackgroundObjectUrl}")`;
+  document.body.classList.add("has-site-background");
+  if (preview) {
+    const image = document.createElement("img");
+    image.src = siteBackgroundObjectUrl;
+    image.alt = "当前背景图片预览";
+    preview.replaceChildren(image);
+  }
+}
+
+function setupSiteBackgroundPicker() {
+  const dialog = document.querySelector("[data-role='background-dialog']");
+  const input = document.querySelector("[data-role='background-input']");
+  const status = document.querySelector("[data-role='background-status']");
+  const backdrop = document.querySelector("[data-role='site-background']");
+  if (!dialog || !input || !backdrop) return;
+  const apiUrl = backdrop.dataset.apiUrl;
+  const setStatus = (message) => { if (status) status.textContent = message; };
+
+  setStatus("正在读取共享背景设置…");
+  fetch(apiUrl, { cache: "no-store" }).then(async (response) => {
+    if (response.status === 404) return null;
+    if (!response.ok) throw new Error("背景加载失败");
+    return response.blob();
+  }).then((blob) => {
+    applySiteBackground(blob);
+    setStatus("设置保存在主站，并与相册页面共享。");
+  }).catch(() => {
+    setStatus("背景设置暂时无法读取，请确认主站服务可用。");
+  });
+
+  document.querySelectorAll("[data-action='background-open']").forEach((button) => {
+    button.addEventListener("click", () => {
+      if (typeof dialog.showModal === "function") dialog.showModal();
+      else dialog.setAttribute("open", "");
+    });
+  });
+  document.querySelectorAll("[data-action='background-close']").forEach((button) => {
+    button.addEventListener("click", () => dialog.close());
+  });
+  input.addEventListener("change", async () => {
+    const file = input.files && input.files[0];
+    input.value = "";
+    if (!file) return;
+    if (!file.type.startsWith("image/")) {
+      setStatus("请选择图片文件。");
+      return;
+    }
+    if (file.size > 30 * 1024 * 1024) {
+      setStatus("图片太大了，请选择 30 MB 以内的图片。");
+      return;
+    }
+    setStatus("正在保存背景图片…");
+    try {
+      const payload = new FormData();
+      payload.append("image", file);
+      const response = await fetch(apiUrl, { method: "POST", body: payload, cache: "no-store" });
+      if (!response.ok) {
+        const result = await response.json().catch(() => ({}));
+        throw new Error(result.error || `上传失败（${response.status}）`);
+      }
+      const savedImage = await fetch(apiUrl, { cache: "no-store" });
+      if (!savedImage.ok) throw new Error("图片已上传，但读取背景图片失败。");
+      applySiteBackground(await savedImage.blob());
+      setStatus("背景已应用到所有页面。");
+    } catch (error) {
+      setStatus(error.message === "Failed to fetch"
+        ? "无法连接主站背景服务，请检查网络后重试。"
+        : (error.message || "背景图片保存失败，请重试。"));
+    }
+  });
+
+  document.querySelectorAll("[data-action='background-reset']").forEach((button) => {
+    button.addEventListener("click", async () => {
+      try {
+        const payload = new FormData();
+        payload.append("action", "clear");
+        const response = await fetch(apiUrl, { method: "POST", body: payload, cache: "no-store" });
+        if (!response.ok) throw new Error("clear failed");
+        applySiteBackground(null);
+        setStatus("已恢复默认背景。");
+      } catch (_error) {
+        setStatus("恢复默认背景失败，请重试。");
+      }
+    });
+  });
+}
+
+setupSiteBackgroundPicker();

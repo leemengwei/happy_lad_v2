@@ -1,0 +1,2 @@
+# Happy Lad v2 fixed camera aliases by physical USB path
+SUBSYSTEM=="video4linux", KERNEL=="video*", ENV{ID_SERIAL}=="Camera_Vendor_USB3_openMV_Camera_00.00.01", ATTR{index}=="0", SYMLINK+="video-cam0"

@@ -1,19 +1,10 @@
 import time
-import io
-import ipaddress
-import socket
-import urllib.parse
-import urllib.request
 import datetime
-import threading
 from flask import Blueprint, current_app, render_template, Response, abort, send_from_directory, url_for, request
-from PIL import Image, ImageDraw
 
 
 dashboard_bp = Blueprint("dashboard", __name__)
 BABY_BIRTHDAY_TEXT = "2026-06-29"
-_qr_cache_lock = threading.Lock()
-_qr_cache_body = None
 
 
 def _get_manager():
@@ -104,31 +95,6 @@ def _build_timeline_month_groups(day_groups: list) -> list:
     return month_groups
 
 
-def _detect_lan_ip() -> str:
-    # Prefer the outbound interface address (works without sending traffic).
-    try:
-        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
-            sock.connect(("8.8.8.8", 80))
-            ip = sock.getsockname()[0]
-            ipaddress.ip_address(ip)
-            if not ip.startswith("127."):
-                return ip
-    except Exception:
-        pass
-
-    # Fallback to hostname resolution if needed.
-    try:
-        ip = socket.gethostbyname(socket.gethostname())
-        ipaddress.ip_address(ip)
-        if not ip.startswith("127."):
-            return ip
-    except Exception:
-        pass
-    return "127.0.0.1"
-
-
-
-
 @dashboard_bp.route("/")
 def dashboard():
     return render_template(
@@ -148,49 +114,6 @@ def feedback_board():
         remote_album_server=current_app.config.get("REMOTE_ALBUM_SERVER"),
         remote_album_path=current_app.config.get("REMOTE_ALBUM_PATH"),
     )
-
-
-@dashboard_bp.route("/qr/home.png")
-def home_qr_png():
-    global _qr_cache_body
-    with _qr_cache_lock:
-        if _qr_cache_body is not None:
-            return Response(_qr_cache_body, mimetype="image/png")
-
-    host = request.host or ""
-    if ":" in host and host.count(":") == 1:
-        _host_name, host_port = host.rsplit(":", 1)
-    else:
-        host_port = ""
-
-    resolved_host = _detect_lan_ip()
-    netloc = f"{resolved_host}:{host_port}" if host_port else resolved_host
-    target = f"{request.scheme}://{netloc}{url_for('dashboard.dashboard')}"
-    qr_url = (
-        "https://api.qrserver.com/v1/create-qr-code/"
-        f"?size=240x240&margin=0&data={urllib.parse.quote(target, safe='')}"
-    )
-    try:
-        with urllib.request.urlopen(qr_url, timeout=5) as response:
-            body = response.read()
-            if body:
-                with _qr_cache_lock:
-                    _qr_cache_body = body
-                return Response(body, mimetype="image/png")
-    except Exception:
-        pass
-
-    # Fallback placeholder if upstream QR service is temporarily unavailable.
-    image = Image.new("RGB", (240, 240), color=(255, 255, 255))
-    draw = ImageDraw.Draw(image)
-    draw.rectangle((0, 0, 239, 239), outline=(160, 160, 160), width=2)
-    draw.text((20, 108), "QR Unavailable", fill=(80, 80, 80))
-    buf = io.BytesIO()
-    image.save(buf, format="PNG")
-    fallback_body = buf.getvalue()
-    with _qr_cache_lock:
-        _qr_cache_body = fallback_body
-    return Response(fallback_body, mimetype="image/png")
 
 
 @dashboard_bp.route("/diagnostics")
@@ -223,14 +146,14 @@ def uploader():
 
     media_library = current_app.config["MEDIA_LIBRARY"]
     try:
-        page = int(request.args.get("page", 1))
-    except Exception:
+        page = max(1, int(request.args.get("page", 1)))
+    except (TypeError, ValueError):
         page = 1
     try:
-        per_page = int(request.args.get("per_page", 50))
-    except Exception:
-        per_page = 50
-    per_page = max(20, min(per_page, 1000))
+        per_page = int(request.args.get("per_page", 100))
+    except (TypeError, ValueError):
+        per_page = 100
+    per_page = max(50, min(per_page, 200))
     sort_by = request.args.get("sort_by", "captured")
     sort_order = request.args.get("sort_order", "desc")
 
@@ -240,16 +163,11 @@ def uploader():
         sort_by=sort_by,
         sort_order=sort_order,
     )
-    birth_date = datetime.date(2026, 6, 29)
-    today_age_text = _compute_age_text(birth_date, datetime.date.today())
-    timeline_mode = result["sort_by"] == "captured"
-    timeline_groups = _build_timeline_groups(result["items"], birth_date=birth_date) if timeline_mode else []
-    timeline_month_groups = _build_timeline_month_groups(timeline_groups) if timeline_mode else []
     trash_items = media_library.list_trash(limit=120)
     stats = media_library.get_storage_stats()
     total = result["total"]
     total_pages = max(1, (total + per_page - 1) // per_page)
-    page = min(max(1, result["page"]), total_pages)
+    page = min(page, total_pages)
     if page != result["page"]:
         result = media_library.list_media_paginated(
             page=page,
@@ -257,6 +175,11 @@ def uploader():
             sort_by=sort_by,
             sort_order=sort_order,
         )
+    birth_date = datetime.date(2026, 6, 29)
+    today_age_text = _compute_age_text(birth_date, datetime.date.today())
+    timeline_mode = result["sort_by"] == "captured"
+    timeline_groups = _build_timeline_groups(result["items"], birth_date=birth_date) if timeline_mode else []
+    timeline_month_groups = _build_timeline_month_groups(timeline_groups) if timeline_mode else []
 
     return render_template(
         "uploader.html",

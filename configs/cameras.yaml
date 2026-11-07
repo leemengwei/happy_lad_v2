@@ -1,6 +1,5 @@
 cameras:
-- device: /dev/video-cam0
-  fps: 10
+- device: /dev/v4l/by-path/platform-3610000.xhci-usb-0:2.2:1.0-video-index0
   height: 1080
   id: cam0
   model_config: /home/feifeichouchou/happy_lad_v2/configs/dstest1_pgie_config.txt
@@ -13,22 +12,21 @@ cameras:
     time_span_years: 5.0
   storage_dir: /home/feifeichouchou/happy_lad_v2/images/cam0
   width: 1920
-- device: /dev/video-cam1
-  fps: 10
+- device: /dev/v4l/by-path/platform-3610000.xhci-usb-0:2.4:1.0-video-index0
   height: 1080
   id: cam1
   model_config: /home/feifeichouchou/happy_lad_v2/configs/dstest1_pgie_config.txt
   name: Kitchen
-  recent_samples_limit: 60
+  recent_samples_limit: 90
   sample_sound_file: /home/feifeichouchou/happy_lad_v2/xiaomaozi.wav
-  sample_sound_volume: 0.85
+  sample_sound_volume: 0.67
   sampling:
     cooldown_hours: 24.0
     time_span_years: 5.0
   storage_dir: /home/feifeichouchou/happy_lad_v2/images/cam1
   width: 1920
 system:
-  abnormal_min_active_streams: 2
+  abnormal_min_active_streams: 1
   abnormal_reboot_after_hours: 3
   auto_reboot_enabled: true
   reboot_command:

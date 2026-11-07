@@ -18,9 +18,10 @@ if [ ! -d "${XDG_RUNTIME_DIR}" ]; then
   chmod 700 "${XDG_RUNTIME_DIR}" || true
 fi
 
-# Wait for udev aliases to appear after reboot.
+# Wait for both camera nodes to appear after reboot.
 for _ in $(seq 1 30); do
-  [ -e /dev/video-cam0 ] && [ -e /dev/video-cam1 ] && break
+  [ -e /dev/v4l/by-path/platform-3610000.xhci-usb-0:2.2:1.0-video-index0 ] && \
+    [ -e /dev/v4l/by-path/platform-3610000.xhci-usb-0:2.4:1.0-video-index0 ] && break
   sleep 1
 done
 

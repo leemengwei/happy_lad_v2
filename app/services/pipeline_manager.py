@@ -35,7 +35,6 @@ class PipelineManager:
                 device=camera.device,
                 width=camera.width,
                 height=camera.height,
-                fps=camera.fps,
                 model_config=camera.model_config,
                 sampling_policy=sampling_policy,
                 storage=storage,

@@ -32,7 +32,6 @@ class DeepStreamPipeline:
         device: str,
         width: int,
         height: int,
-        fps: int,
         model_config: str,
         sampling_policy: SamplingPolicy,
         storage: Storage,
@@ -45,7 +44,6 @@ class DeepStreamPipeline:
         self.device = device
         self.width = width
         self.height = height
-        self.fps = fps
         self.model_config = model_config
         self.sampling_policy = sampling_policy
         self.storage = storage
@@ -74,7 +72,12 @@ class DeepStreamPipeline:
         self._sound_warned = False
         self._preview_interval = 2.0
         self._next_preview_at = 0.0
-        self._probe_counter = 0
+        # The source is fixed at 30 FPS and PGIE interval=5, so inference
+        # produces a new decision frame once every six source frames.
+        self._decision_counter = 0
+        self._capture_lock = threading.Lock()
+        self._capture_pending = False
+        self._capture_last_result: Optional[dict] = None
 
     def _build_pipeline(self) -> Gst.Pipeline:
         pipeline = Gst.Pipeline()
@@ -112,6 +115,8 @@ class DeepStreamPipeline:
         caps_filter.set_property("caps", caps)
         decoder.set_property("mjpeg", True)
         decoder.set_property("enable-max-performance", True)
+        # Rotate every camera frame 180 degrees before inference and preview.
+        decodeconv.set_property("flip-method", 2)
         decode_caps.set_property(
             "caps", Gst.Caps.from_string("video/x-raw(memory:NVMM),format=NV12")
         )
@@ -175,8 +180,8 @@ class DeepStreamPipeline:
             except StopIteration:
                 break
 
-            self._probe_counter = (self._probe_counter + 1) % 3
-            if self._probe_counter:
+            self._decision_counter = (self._decision_counter + 1) % 6
+            if self._decision_counter:
                 with self._status_lock:
                     self._last_frame_time = datetime.datetime.now()
                 try:
@@ -201,8 +206,12 @@ class DeepStreamPipeline:
 
             snoozing = self.is_snoozing()
             if snoozing:
-                self.sampling_state.force_snapshot = False
-                should_sample = False
+                # A user-requested snapshot must survive snooze. Automatic
+                # sampling remains disabled while snoozing.
+                should_sample = self.sampling_state.force_snapshot
+                if should_sample:
+                    self.sampling_state.force_snapshot = False
+                    self.sampling_state.last_sample_time = datetime.datetime.now()
             else:
                 should_sample = self.sampling_policy.should_sample(
                     self.sampling_state,
@@ -213,18 +222,10 @@ class DeepStreamPipeline:
                 logger.info("First frame received: %s", self.camera_id)
 
             if should_sample:
-                # Capture before nvdsosd so saved samples contain only the
-                # camera image plus the timestamp, without detection OSD.
-                frame = pyds.get_nvds_buf_surface(hash(gst_buffer), frame_meta.batch_id)
-                frame_copy = np.array(frame, copy=True, order="C")
-                frame_copy = cv2.cvtColor(frame_copy, cv2.COLOR_RGBA2BGR)
-                timestamp = time.strftime("%Y/%m/%d %H:%M:%S", time.localtime())
-                cv2.putText(
-                    frame_copy, timestamp, (10, 30), cv2.FONT_HERSHEY_SIMPLEX,
-                    1, (255, 255, 255), 2, cv2.LINE_AA,
-                )
-                self.storage.save_sample(frame_copy, self.camera_name)
-                self._play_sample_sound()
+                # The PGIE output is NV12. Defer surface access to the
+                # post-conversion probe, where the surface is RGBA.
+                with self._capture_lock:
+                    self._capture_pending = True
 
             with self._status_lock:
                 self._last_frame_time = datetime.datetime.now()
@@ -251,6 +252,8 @@ class DeepStreamPipeline:
                 break
 
             now_mono = time.monotonic()
+            with self._capture_lock:
+                capture = self._capture_pending
             if now_mono < self._next_preview_at:
                 try:
                     l_frame = l_frame.next
@@ -263,6 +266,23 @@ class DeepStreamPipeline:
             frame = pyds.get_nvds_buf_surface(hash(gst_buffer), frame_meta.batch_id)
             frame_copy = np.array(frame, copy=True, order="C")
             frame_copy = cv2.cvtColor(frame_copy, cv2.COLOR_RGBA2BGR)
+
+            if capture:
+                timestamp = time.strftime("%Y/%m/%d %H:%M:%S", time.localtime())
+                cv2.putText(
+                    frame_copy, timestamp, (10, 30), cv2.FONT_HERSHEY_SIMPLEX,
+                    1, (255, 255, 255), 2, cv2.LINE_AA,
+                )
+                try:
+                    path = self.storage.save_sample(frame_copy, self.camera_name)
+                    self._play_sample_sound()
+                    result = {"ok": True, "path": path, "error": None}
+                except Exception as exc:
+                    logger.exception("Snapshot save failed for %s", self.camera_id)
+                    result = {"ok": False, "path": None, "error": str(exc)}
+                with self._capture_lock:
+                    self._capture_pending = False
+                    self._capture_last_result = result
 
             # The preview retains the detection/status overlay and timestamp.
             timestamp = time.strftime("%Y/%m/%d %H:%M:%S", time.localtime())
@@ -362,9 +382,6 @@ class DeepStreamPipeline:
         self.thread.start()
 
     def stop(self) -> None:
-        if not self._running:
-            return
-
         self._running = False
         with self._status_lock:
             self._last_start_time = None
@@ -397,8 +414,11 @@ class DeepStreamPipeline:
 
     def restart(self) -> None:
         logger.warning("Restarting pipeline for %s", self.camera_id)
-        if self._running:
-            self.stop()
+        # A bus ERROR/EOS marks the pipeline not running, but the GStreamer
+        # elements may still own the V4L2 handle. Always tear down to NULL
+        # before starting again, otherwise watchdog retries reuse a broken
+        # source and can leave the camera stuck at TRY_FMT/EIO.
+        self.stop()
         self.start()
 
     def is_stalled(self, timeout_seconds: int = 20) -> bool:
@@ -419,6 +439,12 @@ class DeepStreamPipeline:
     def force_snapshot(self) -> None:
         logger.info("Force snapshot requested for %s", self.camera_id)
         self.sampling_state.force_snapshot = True
+        with self._capture_lock:
+            self._capture_last_result = {"ok": False, "path": None, "error": "pending"}
+
+    def get_capture_status(self) -> Optional[dict]:
+        with self._capture_lock:
+            return dict(self._capture_last_result) if self._capture_last_result else None
 
     def add_snooze(self, minutes: int = 10) -> datetime.datetime:
         now = datetime.datetime.now()
