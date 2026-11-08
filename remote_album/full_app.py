@@ -1,4 +1,5 @@
-import datetime, hashlib, mimetypes, os, re, sqlite3, subprocess, urllib.request, uuid
+import datetime, hashlib, logging, mimetypes, os, re, sqlite3, subprocess, urllib.request, uuid
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from flask import Flask, Blueprint, jsonify, render_template, request, send_from_directory, url_for
 from werkzeug.utils import secure_filename
@@ -6,6 +7,15 @@ from media_library import MediaLibrary
 
 BASE = Path(os.environ.get('ALBUM_BASE', '/root/nvme/happy_lad_uploader'))
 UPLOADS = BASE / 'uploads'
+UPLOAD_LOG_DIR = BASE / 'logs'
+UPLOAD_LOG_DIR.mkdir(parents=True, exist_ok=True)
+UPLOAD_LOGGER = logging.getLogger("happy_lad.album_uploads")
+UPLOAD_LOGGER.setLevel(logging.INFO)
+UPLOAD_LOGGER.propagate = False
+if not any(getattr(handler, "baseFilename", "").endswith("/logs/upload_dedup.log") for handler in UPLOAD_LOGGER.handlers):
+    upload_log_handler = RotatingFileHandler(UPLOAD_LOG_DIR / "upload_dedup.log", maxBytes=10 * 1024 * 1024, backupCount=5, encoding="utf-8")
+    upload_log_handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
+    UPLOAD_LOGGER.addHandler(upload_log_handler)
 library = MediaLibrary(str(BASE / 'data' / 'media.db'), str(UPLOADS))
 
 def _ensure_content_hash_column():
@@ -20,32 +30,8 @@ def _ensure_content_hash_column():
         conn.close()
 
 def _active_duplicate(content_hash):
-    conn = sqlite3.connect(library.db_path)
-    conn.row_factory = sqlite3.Row
-    try:
-        row = conn.execute('SELECT id, original_name, storage_path FROM media WHERE content_hash=? AND deleted_at IS NULL LIMIT 1', (content_hash,)).fetchone()
-        if row:
-            return dict(row)
-        # Older uploads predate hashes. Fill them lazily so the first duplicate
-        # check remains correct without hashing the entire library at startup.
-        legacy = conn.execute('SELECT id, original_name, storage_path FROM media WHERE content_hash IS NULL AND deleted_at IS NULL').fetchall()
-        for item in legacy:
-            path = UPLOADS / item['storage_path']
-            if not path.is_file():
-                continue
-            digest = hashlib.sha256()
-            with path.open('rb') as source:
-                for chunk in iter(lambda: source.read(1024 * 1024), b''):
-                    digest.update(chunk)
-            found_hash = digest.hexdigest()
-            conn.execute('UPDATE media SET content_hash=? WHERE id=?', (found_hash, item['id']))
-            if found_hash == content_hash:
-                conn.commit()
-                return {'id': item['id'], 'original_name': item['original_name'], 'storage_path': item['storage_path']}
-        conn.commit()
-        return None
-    finally:
-        conn.close()
+    return library.find_active_duplicate(content_hash)
+
 
 _ensure_content_hash_column()
 app = Flask(__name__, template_folder='/root/album_service/templates', static_folder='/root/album_service/static')
@@ -322,9 +308,19 @@ def feedback_board(): return '意见板暂在主服务中'
 
 @api.post('/uploader/upload')
 def upload():
-    f=request.files.get('file')
-    if not f or not f.filename: return jsonify(error='missing file'),400
-    name=secure_filename(f.filename); ext=Path(name).suffix.lower(); day=datetime.datetime.now().strftime('%Y/%m/%d'); d=UPLOADS/day; d.mkdir(parents=True,exist_ok=True); stored=datetime.datetime.now().strftime('%Y%m%d_%H%M%S_%f')+ext; target=d/stored; f.save(target)
+    f = request.files.get('file')
+    if not f or not f.filename:
+        return jsonify(error='missing file'), 400
+    name = secure_filename(f.filename)
+    ext = Path(name).suffix.lower()
+    day = datetime.datetime.now().strftime('%Y/%m/%d')
+    directory = UPLOADS / day
+    directory.mkdir(parents=True, exist_ok=True)
+    stored = datetime.datetime.now().strftime('%Y%m%d_%H%M%S_%f') + ext
+    target = directory / stored
+    request_id = uuid.uuid4().hex
+    f.save(target)
+    size_bytes = target.stat().st_size
     digest = hashlib.sha256()
     with target.open('rb') as saved_file:
         for chunk in iter(lambda: saved_file.read(1024 * 1024), b''):
@@ -333,18 +329,58 @@ def upload():
     duplicate = _active_duplicate(content_hash)
     if duplicate:
         target.unlink(missing_ok=True)
-        return jsonify(status='duplicate', duplicate=True, duplicate_of=duplicate, original_name=name), 200
-    rel=f'{day}/{stored}'; typ='video' if (f.mimetype or '').startswith('video/') else 'image'
+        UPLOAD_LOGGER.warning(
+            "upload_duplicate_skipped request_id=%s client=%s filename=%r size_bytes=%d sha256=%s existing_media_id=%s existing_filename=%r stage=precheck",
+            request_id, request.remote_addr, name, size_bytes, content_hash,
+            duplicate.get('id'), duplicate.get('original_name'),
+        )
+        return jsonify(status='duplicate', duplicate=True, duplicate_of=duplicate,
+                       original_name=name, size_bytes=size_bytes, request_id=request_id), 200
+
+    rel = f'{day}/{stored}'
+    typ = 'video' if (f.mimetype or '').startswith('video/') else 'image'
     captured_at = _captured_at(
-        target,
-        typ,
+        target, typ,
         client_last_modified=request.form.get('client_last_modified_ms'),
         original_name=name,
     )
     poster = generate_video_poster(target, rel) if typ == 'video' else None
     poster_url = url_for('dashboard.uploaded_media', filename=poster) if poster else ''
-    mid=library.save_media(original_name=name,stored_name=stored,ext=ext,mime_type=f.mimetype or 'application/octet-stream',size_bytes=target.stat().st_size,media_type=typ,storage_path=rel,media_url=url_for('dashboard.uploaded_media',filename=rel),poster_path=poster,poster_url=poster_url,captured_at=captured_at,content_hash=content_hash)
-    return jsonify(status='ok',id=mid,original_name=name,media_type=typ,size_bytes=target.stat().st_size,storage_path=rel,media_url=url_for('dashboard.uploaded_media',filename=rel),poster_url=poster_url,captured_at=captured_at,created_at=datetime.datetime.now().isoformat())
+    media_id, duplicate = library.save_media_if_new(
+        original_name=name,
+        stored_name=stored,
+        ext=ext,
+        mime_type=f.mimetype or 'application/octet-stream',
+        size_bytes=size_bytes,
+        media_type=typ,
+        storage_path=rel,
+        media_url=url_for('dashboard.uploaded_media', filename=rel),
+        poster_path=poster,
+        poster_url=poster_url,
+        captured_at=captured_at,
+        content_hash=content_hash,
+    )
+    if duplicate:
+        target.unlink(missing_ok=True)
+        if poster:
+            (UPLOADS / poster).unlink(missing_ok=True)
+        UPLOAD_LOGGER.warning(
+            "upload_duplicate_skipped request_id=%s client=%s filename=%r size_bytes=%d sha256=%s existing_media_id=%s existing_filename=%r stage=atomic_recheck",
+            request_id, request.remote_addr, name, size_bytes, content_hash,
+            duplicate.get('id'), duplicate.get('original_name'),
+        )
+        return jsonify(status='duplicate', duplicate=True, duplicate_of=duplicate,
+                       original_name=name, size_bytes=size_bytes, request_id=request_id), 200
+
+    UPLOAD_LOGGER.info(
+        "upload_saved request_id=%s client=%s media_id=%s filename=%r size_bytes=%d sha256=%s",
+        request_id, request.remote_addr, media_id, name, size_bytes, content_hash,
+    )
+    return jsonify(status='ok', id=media_id, original_name=name, media_type=typ,
+                   size_bytes=size_bytes, storage_path=rel,
+                   media_url=url_for('dashboard.uploaded_media', filename=rel),
+                   poster_url=poster_url, captured_at=captured_at,
+                   created_at=datetime.datetime.now().isoformat(), request_id=request_id)
 
 @api.post('/uploader/check-duplicates')
 def check_upload_duplicates():

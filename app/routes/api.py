@@ -1,6 +1,9 @@
 import yaml
 import hashlib
 import io
+import logging
+import uuid
+from logging.handlers import RotatingFileHandler
 import os
 import datetime
 import re
@@ -19,6 +22,25 @@ from app.services.sampling import SamplingPolicy
 
 api_bp = Blueprint("api", __name__)
 register_heif_opener()
+_UPLOAD_LOGGER_LOCK = threading.Lock()
+
+
+def _upload_dedupe_logger(media_library):
+    database_path = os.path.abspath(media_library.db_path)
+    log_path = os.path.join(os.path.dirname(database_path), "logs", "upload_dedup.log")
+    os.makedirs(os.path.dirname(log_path), exist_ok=True)
+    logger_name = "happy_lad.upload_dedup." + hashlib.sha1(database_path.encode("utf-8")).hexdigest()[:12]
+    logger = logging.getLogger(logger_name)
+    logger.setLevel(logging.INFO)
+    logger.propagate = False
+    with _UPLOAD_LOGGER_LOCK:
+        if not any(getattr(handler, "baseFilename", None) == log_path for handler in logger.handlers):
+            handler = RotatingFileHandler(log_path, maxBytes=10 * 1024 * 1024, backupCount=5, encoding="utf-8")
+            handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
+            logger.addHandler(handler)
+    return logger
+
+
 FEEDBACK_AUTO_UPGRADE_LOCK = threading.Lock()
 FEEDBACK_AUTO_UPGRADE_STATE_LOCK = threading.Lock()
 FEEDBACK_AUTO_UPGRADE_STATE = {
@@ -835,9 +857,16 @@ def upload_media():
         for chunk in iter(lambda: uploaded_file.read(1024 * 1024), b""):
             digest.update(chunk)
     content_hash = digest.hexdigest()
+    request_id = uuid.uuid4().hex
+    upload_logger = _upload_dedupe_logger(media_library)
     duplicate = media_library.find_active_duplicate(content_hash)
     if duplicate:
         os.remove(generated["abs_path"])
+        upload_logger.warning(
+            "upload_duplicate_skipped request_id=%s client=%s filename=%r size_bytes=%d sha256=%s existing_media_id=%s existing_filename=%r stage=precheck",
+            request_id, request.remote_addr, original_name, size_bytes, content_hash,
+            duplicate.get("id"), duplicate.get("original_name"),
+        )
         return jsonify(
             {
                 "status": "duplicate",
@@ -845,6 +874,7 @@ def upload_media():
                 "duplicate_of": duplicate,
                 "original_name": original_name,
                 "size_bytes": size_bytes,
+                "request_id": request_id,
             }
         )
     media_type = "image" if ext in IMAGE_EXTENSIONS else "video"
@@ -879,7 +909,7 @@ def upload_media():
 
     normalized_name = _normalize_uploaded_name(original_name, ext, generated["stored_name"])
 
-    media_id = media_library.save_media(
+    media_id, duplicate = media_library.save_media_if_new(
         original_name=normalized_name,
         stored_name=generated["stored_name"],
         ext=ext,
@@ -895,6 +925,36 @@ def upload_media():
         longitude=longitude,
         location_text=location_text,
         content_hash=content_hash,
+    )
+    if duplicate:
+        try:
+            os.remove(generated["abs_path"])
+        except FileNotFoundError:
+            pass
+        if poster_path:
+            try:
+                os.remove(os.path.join(media_library.uploads_dir, poster_path))
+            except FileNotFoundError:
+                pass
+        upload_logger.warning(
+            "upload_duplicate_skipped request_id=%s client=%s filename=%r size_bytes=%d sha256=%s existing_media_id=%s existing_filename=%r stage=atomic_recheck",
+            request_id, request.remote_addr, original_name, size_bytes, content_hash,
+            duplicate.get("id"), duplicate.get("original_name"),
+        )
+        return jsonify(
+            {
+                "status": "duplicate",
+                "duplicate": True,
+                "duplicate_of": duplicate,
+                "original_name": original_name,
+                "size_bytes": size_bytes,
+                "request_id": request_id,
+            }
+        )
+
+    upload_logger.info(
+        "upload_saved request_id=%s client=%s media_id=%s filename=%r size_bytes=%d sha256=%s",
+        request_id, request.remote_addr, media_id, normalized_name, size_bytes, content_hash,
     )
     return jsonify(
         {
@@ -912,6 +972,7 @@ def upload_media():
             "latitude": latitude,
             "longitude": longitude,
             "location_text": location_text,
+            "request_id": request_id,
         }
     )
 

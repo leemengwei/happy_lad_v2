@@ -188,56 +188,60 @@ class MediaLibrary:
             "abs_path": abs_path,
         }
 
-    def save_media(
-        self,
-        *,
-        original_name: str,
-        stored_name: str,
-        ext: str,
-        mime_type: str,
-        size_bytes: int,
-        media_type: str,
-        storage_path: str,
-        media_url: str,
-        poster_path: str = None,
-        poster_url: str = None,
-        captured_at: str = None,
-        latitude: float = None,
-        longitude: float = None,
-        location_text: str = None,
-        content_hash: str = None,
-    ) -> int:
+    def _insert_media_row(self, conn, *, original_name, stored_name, ext, mime_type, size_bytes, media_type, storage_path, media_url, poster_path=None, poster_url=None, captured_at=None, latitude=None, longitude=None, location_text=None, content_hash=None):
+        cursor = conn.execute(
+            """
+            INSERT INTO media (
+                original_name, stored_name, ext, mime_type, size_bytes,
+                media_type, storage_path, media_url, poster_path, poster_url, captured_at,
+                latitude, longitude, location_text, content_hash, deleted_at, purge_at, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?)
+            """,
+            (
+                original_name, stored_name, ext, mime_type, size_bytes,
+                media_type, storage_path, media_url, poster_path, poster_url, captured_at,
+                latitude, longitude, location_text, content_hash, datetime.datetime.now().isoformat(),
+            ),
+        )
+        return int(cursor.lastrowid)
+
+    def save_media(self, *, original_name, stored_name, ext, mime_type, size_bytes, media_type, storage_path, media_url, poster_path=None, poster_url=None, captured_at=None, latitude=None, longitude=None, location_text=None, content_hash=None) -> int:
         conn = sqlite3.connect(self.db_path)
         try:
-            cursor = conn.execute(
-                """
-                INSERT INTO media (
-                    original_name, stored_name, ext, mime_type, size_bytes,
-                    media_type, storage_path, media_url, poster_path, poster_url, captured_at,
-                    latitude, longitude, location_text, content_hash, deleted_at, purge_at, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?)
-                """,
-                (
-                    original_name,
-                    stored_name,
-                    ext,
-                    mime_type,
-                    size_bytes,
-                    media_type,
-                    storage_path,
-                    media_url,
-                    poster_path,
-                    poster_url,
-                    captured_at,
-                    latitude,
-                    longitude,
-                    location_text,
-                    content_hash,
-                    datetime.datetime.now().isoformat(),
-                ),
+            media_id = self._insert_media_row(
+                conn, original_name=original_name, stored_name=stored_name, ext=ext,
+                mime_type=mime_type, size_bytes=size_bytes, media_type=media_type,
+                storage_path=storage_path, media_url=media_url, poster_path=poster_path,
+                poster_url=poster_url, captured_at=captured_at, latitude=latitude,
+                longitude=longitude, location_text=location_text, content_hash=content_hash,
             )
             conn.commit()
-            return int(cursor.lastrowid)
+            return media_id
+        finally:
+            conn.close()
+
+    def save_media_if_new(self, **media):
+        """Serialize the final duplicate check and insert across upload workers."""
+        conn = sqlite3.connect(self.db_path, timeout=30)
+        conn.row_factory = sqlite3.Row
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            content_hash = media.get("content_hash")
+            if content_hash:
+                duplicate = conn.execute(
+                    "SELECT id, original_name, storage_path FROM media "
+                    "WHERE content_hash = ? AND deleted_at IS NULL LIMIT 1",
+                    (content_hash,),
+                ).fetchone()
+                if duplicate:
+                    conn.rollback()
+                    return None, dict(duplicate)
+            media_id = self._insert_media_row(conn, **media)
+            conn.commit()
+            return media_id, None
+        except Exception:
+            conn.rollback()
+            raise
         finally:
             conn.close()
 

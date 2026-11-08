@@ -1008,43 +1008,117 @@ function toggleTrashPanel() {
 }
 
 if (uploaderForm) {
+  const duplicateNoticeKey = "happy-lad-upload-duplicate-notice-v1";
+  const duplicateNotice = document.getElementById("uploader-duplicate-alert");
+  const duplicateSummary = duplicateNotice?.querySelector("[data-role='upload-duplicate-summary']");
+  const duplicateTime = duplicateNotice?.querySelector("[data-role='upload-duplicate-time']");
+  const duplicateList = duplicateNotice?.querySelector("[data-role='upload-duplicate-list']");
+  const readDuplicateNotice = () => {
+    try {
+      const saved = JSON.parse(localStorage.getItem(duplicateNoticeKey) || "{}");
+      return { entries: Array.isArray(saved.entries) ? saved.entries : [], lastUpdated: saved.lastUpdated || null };
+    } catch (_error) {
+      return { entries: [], lastUpdated: null };
+    }
+  };
+  let duplicateNoticeState = readDuplicateNotice();
+  const renderDuplicateNotice = () => {
+    if (!duplicateNotice) return;
+    const entries = duplicateNoticeState.entries;
+    duplicateNotice.hidden = entries.length === 0;
+    if (entries.length === 0) return;
+    if (duplicateSummary) {
+      duplicateSummary.textContent = `已拦截 ${entries.length} 个重复上传；这些文件均未再次入库。提醒会保留，直到你手动关闭。`;
+    }
+    if (duplicateTime) {
+      duplicateTime.textContent = duplicateNoticeState.lastUpdated
+        ? `最近一次检测：${new Date(duplicateNoticeState.lastUpdated).toLocaleString()}`
+        : "";
+    }
+    if (duplicateList) {
+      duplicateList.replaceChildren();
+      entries.slice(-20).forEach((item) => {
+        const row = document.createElement("li");
+        const uploadedName = item.fileName || "未命名媒体";
+        row.textContent = item.existingName && item.existingName !== uploadedName
+          ? `${uploadedName}（相册中已有：${item.existingName}）`
+          : uploadedName;
+        duplicateList.appendChild(row);
+      });
+      if (entries.length > 20) {
+        const more = document.createElement("li");
+        more.textContent = `另有 ${entries.length - 20} 条较早记录`;
+        duplicateList.appendChild(more);
+      }
+    }
+  };
+  const recordDuplicateUploads = (items) => {
+    if (!items.length) return;
+    duplicateNoticeState = {
+      entries: [...duplicateNoticeState.entries, ...items].slice(-100),
+      lastUpdated: new Date().toISOString(),
+    };
+    try {
+      localStorage.setItem(duplicateNoticeKey, JSON.stringify(duplicateNoticeState));
+    } catch (_error) {
+      // Keep the alert visible for this page even when browser storage is unavailable.
+    }
+    renderDuplicateNotice();
+  };
+  renderDuplicateNotice();
+  duplicateNotice?.querySelector("[data-action='dismiss-duplicate-alert']")?.addEventListener("click", () => {
+    duplicateNoticeState = { entries: [], lastUpdated: null };
+    try { localStorage.removeItem(duplicateNoticeKey); } catch (_error) {}
+    renderDuplicateNotice();
+  });
+
   const uploadSelectedFiles = async (files) => {
     const status = document.getElementById("uploader-status");
+    const selectionStatus = document.getElementById("uploader-selection-status");
     const grid = document.getElementById("uploader-grid");
-
     let okCount = 0;
     let duplicateCount = 0;
     let failCount = 0;
+    const duplicateItems = [];
+
     for (let i = 0; i < files.length; i += 1) {
       const file = files[i];
       if (status) status.textContent = `正在投喂 ${i + 1}/${files.length}: ${file.name}`;
       const payload = new FormData();
       payload.append("file", file);
       payload.append("client_last_modified_ms", String(file.lastModified || ""));
-      const response = await fetch("/api/uploader/upload", {
-        method: "POST",
-        body: payload,
-      });
-      const data = await response.json();
-      if (!response.ok) {
-        if (data.duplicate) duplicateCount += 1;
-        else failCount += 1;
-        continue;
-      }
-      if (data.duplicate) {
-        duplicateCount += 1;
-        continue;
-      }
-      okCount += 1;
-      if (grid) {
-        grid.prepend(createUploaderCard(data));
+      try {
+        const response = await fetch("/api/uploader/upload", { method: "POST", body: payload });
+        const data = await response.json();
+        if (data.duplicate) {
+          duplicateCount += 1;
+          duplicateItems.push({
+            fileName: file.name,
+            existingName: data.duplicate_of?.original_name || "",
+            mediaId: data.duplicate_of?.id || null,
+            requestId: data.request_id || "",
+          });
+          recordDuplicateUploads([duplicateItems[duplicateItems.length - 1]]);
+          continue;
+        }
+        if (!response.ok) {
+          failCount += 1;
+          continue;
+        }
+        okCount += 1;
+        if (grid) grid.prepend(createUploaderCard(data));
+      } catch (_error) {
+        failCount += 1;
       }
     }
 
-    if (status) status.textContent = `投喂完成：新增 ${okCount} 个，重复忽略 ${duplicateCount} 个，失败 ${failCount} 个`;
-    const url = new URL(window.location.href);
-    url.searchParams.set("page", "1");
-    window.location.href = url.toString();
+    if (status) status.textContent = `投喂完成：新增 ${okCount} 个，重复拦截 ${duplicateCount} 个，失败 ${failCount} 个`;
+    if (selectionStatus) selectionStatus.textContent = `本批处理完成：新增 ${okCount} 个，重复拦截 ${duplicateCount} 个，失败 ${failCount} 个`;
+    if (okCount > 0) {
+      const url = new URL(window.location.href);
+      url.searchParams.set("page", "1");
+      window.location.href = url.toString();
+    }
   };
 
   const input = document.getElementById("uploader-input");
