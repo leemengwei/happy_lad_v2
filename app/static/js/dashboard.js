@@ -545,7 +545,7 @@ document.addEventListener("click", async (event) => {
   if (target.matches("[data-role='uploader-link']") || target.closest("[data-role='uploader-link']")) {
     const link = target.matches("[data-role='uploader-link']") ? target : target.closest("[data-role='uploader-link']");
     event.preventDefault();
-    openUploaderLightboxByFile(link.dataset.file || "");
+    openUploaderLightboxByFile(link.dataset.file || "", "gallery", Number(link.dataset.id || 0));
   }
 
   if (target.matches("[data-action='uploader-lightbox-close']")) {
@@ -566,6 +566,9 @@ document.addEventListener("click", async (event) => {
   if (target.matches("[data-action='uploader-lightbox-download']")) {
     downloadCurrentUploaderItem();
   }
+  if (target.matches("[data-action='uploader-favorite']")) {
+    toggleUploaderFavorite();
+  }
   if (target.matches("[data-action='uploader-send-danmu']")) {
     sendUploaderDanmu();
   }
@@ -578,6 +581,15 @@ document.addEventListener("change", (event) => {
   if (event.target.matches("[data-role='uploader-danmu-details']")) {
     const layer = document.querySelector("[data-role='uploader-danmu-layer']");
     if (!event.target.open && layer) layer.innerHTML = "";
+  }
+  if (event.target.matches("[data-role='favorite-check']")) {
+    updateFavoriteSelection();
+  }
+  if (event.target.matches("[data-role='favorites-select-all']")) {
+    document.querySelectorAll("[data-role='favorite-check']").forEach((check) => {
+      check.checked = event.target.checked;
+    });
+    updateFavoriteSelection();
   }
 });
 
@@ -712,6 +724,7 @@ function rebuildUploaderLightboxItems(source = "gallery") {
     capturedAt: item.dataset.capturedAt || "",
     createdAt: item.dataset.createdAt || "",
     location: item.dataset.location || "",
+    isFavorite: item.dataset.favorited === "true",
   }));
 }
 
@@ -723,8 +736,15 @@ function renderUploaderLightbox() {
 
   const current = uploaderLightboxState.items[uploaderLightboxState.index];
   const deleteButton = document.querySelector("[data-action='uploader-lightbox-delete']");
+  const favoriteButton = document.querySelector("[data-action='uploader-favorite']");
   if (deleteButton) {
     deleteButton.style.display = uploaderLightboxState.source === "trash" ? "none" : "";
+  }
+  if (favoriteButton) {
+    favoriteButton.style.display = uploaderLightboxState.source === "trash" ? "none" : "";
+    favoriteButton.disabled = false;
+    favoriteButton.setAttribute("aria-pressed", String(Boolean(current.isFavorite)));
+    favoriteButton.textContent = current.isFavorite ? "♥ 已炒鸡喜欢" : "♡ 炒鸡喜欢";
   }
   stage.innerHTML = "";
   if (current.mediaType === "video") {
@@ -759,10 +779,10 @@ function renderUploaderLightbox() {
   loadUploaderInteractions();
 }
 
-function openUploaderLightboxByFile(fileName, source = "gallery") {
+function openUploaderLightboxByFile(fileName, source = "gallery", mediaId = 0) {
   rebuildUploaderLightboxItems(source);
   if (uploaderLightboxState.items.length === 0) return;
-  const idx = uploaderLightboxState.items.findIndex((item) => item.file === fileName);
+  const idx = uploaderLightboxState.items.findIndex((item) => mediaId ? item.id === mediaId : item.file === fileName);
   uploaderLightboxState.index = idx >= 0 ? idx : 0;
   uploaderLightboxState.open = true;
   const lightbox = document.querySelector("[data-role='uploader-lightbox']");
@@ -934,6 +954,110 @@ function downloadCurrentUploaderItem() {
   link.remove();
 }
 
+async function toggleUploaderFavorite() {
+  if (!uploaderLightboxState.open || uploaderLightboxState.source === "trash") return;
+  const current = uploaderLightboxState.items[uploaderLightboxState.index];
+  const button = document.querySelector("[data-action='uploader-favorite']");
+  if (!current || !current.id || !button) return;
+  button.disabled = true;
+  try {
+    const response = await fetch("/api/uploader/favorites", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: current.id, favorited: !current.isFavorite }),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.error || "收藏状态更新失败");
+    current.isFavorite = Boolean(data.favorited);
+    document.querySelectorAll(`[data-role='uploader-link'][data-id='${current.id}']`).forEach((link) => {
+      link.dataset.favorited = String(current.isFavorite);
+    });
+    button.setAttribute("aria-pressed", String(current.isFavorite));
+    button.textContent = current.isFavorite ? "♥ 已炒鸡喜欢" : "♡ 炒鸡喜欢";
+    const favoriteCard = document.querySelector(`[data-role='favorite-card'][data-id='${current.id}']`);
+    if (!current.isFavorite && favoriteCard) {
+      favoriteCard.remove();
+      updateFavoriteSelection();
+    }
+  } catch (error) {
+    const status = document.querySelector("[data-role='favorites-download-status']") || document.getElementById("uploader-status");
+    if (status) status.textContent = error.message || "收藏状态更新失败，请重试。";
+  } finally {
+    button.disabled = false;
+  }
+}
+
+function updateFavoriteSelection() {
+  const checks = Array.from(document.querySelectorAll("[data-role='favorite-check']"));
+  const selected = checks.filter((item) => item.checked).length;
+  const downloadButton = document.querySelector("[data-action='favorites-download']");
+  const status = document.querySelector("[data-role='favorites-selection-status']");
+  const selectAll = document.querySelector("[data-role='favorites-select-all']");
+  if (downloadButton) downloadButton.disabled = selected === 0;
+  if (status) status.textContent = `已选择 ${selected} / ${checks.length} 项`;
+  if (selectAll) {
+    selectAll.checked = checks.length > 0 && selected === checks.length;
+    selectAll.indeterminate = selected > 0 && selected < checks.length;
+  }
+  const empty = document.querySelector("[data-role='favorites-empty']");
+  if (empty) empty.hidden = document.querySelectorAll("[data-role='favorite-card']").length > 0;
+}
+
+async function removeFavorite(mediaId) {
+  const card = document.querySelector(`[data-role='favorite-card'][data-id='${mediaId}']`);
+  const status = document.querySelector("[data-role='favorites-download-status']");
+  try {
+    const response = await fetch("/api/uploader/favorites", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: mediaId, favorited: false }),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.error || "取消收藏失败");
+    card?.remove();
+    updateFavoriteSelection();
+    if (status) status.textContent = "已从“炒鸡喜欢”中移除。";
+  } catch (error) {
+    if (status) status.textContent = error.message || "取消收藏失败，请重试。";
+  }
+}
+
+async function downloadSelectedFavorites() {
+  const ids = Array.from(document.querySelectorAll("[data-role='favorite-check']:checked"))
+    .map((item) => Number(item.value))
+    .filter((id) => Number.isInteger(id) && id > 0);
+  const button = document.querySelector("[data-action='favorites-download']");
+  const status = document.querySelector("[data-role='favorites-download-status']");
+  if (!ids.length || !button) return;
+  button.disabled = true;
+  if (status) status.textContent = `正在打包 ${ids.length} 个媒体…`;
+  try {
+    const response = await fetch("/api/uploader/favorites/download", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ids }),
+    });
+    if (!response.ok) {
+      const data = await response.json().catch(() => ({}));
+      throw new Error(data.error || "打包下载失败");
+    }
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = "炒鸡喜欢.zip";
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 30000);
+    if (status) status.textContent = `已开始下载 ${ids.length} 个媒体。`;
+  } catch (error) {
+    if (status) status.textContent = error.message || "打包下载失败，请重试。";
+  } finally {
+    button.disabled = false;
+  }
+}
+
 function createUploaderCard(data) {
   const a = document.createElement("a");
   a.className = `recent-item uploader-item${data.media_type === "video" ? " media-video" : ""}`;
@@ -947,6 +1071,7 @@ function createUploaderCard(data) {
   a.dataset.capturedAt = data.captured_at || "";
   a.dataset.createdAt = data.created_at || new Date().toISOString();
   a.dataset.location = data.location_text || "";
+  a.dataset.favorited = "false";
   if (data.media_type === "video") {
     const video = document.createElement("video");
     video.src = data.media_url;
@@ -1311,10 +1436,23 @@ document.addEventListener("click", async (event) => {
   if (target.matches("[data-action='trash-toggle']")) {
     toggleTrashPanel();
   }
+  if (target.matches("[data-action='favorite-remove']")) {
+    await removeFavorite(parseInt(target.dataset.id || "0", 10));
+  }
+  if (target.matches("[data-action='favorites-download']")) {
+    await downloadSelectedFavorites();
+  }
+  if (target.matches("[data-action='favorites-select-all']")) {
+    const selectAll = document.querySelector("[data-role='favorites-select-all']");
+    if (selectAll) {
+      selectAll.checked = !selectAll.checked;
+      selectAll.dispatchEvent(new Event("change", { bubbles: true }));
+    }
+  }
   if (target.matches("[data-role='trash-link']") || target.closest("[data-role='trash-link']")) {
     event.preventDefault();
     const link = target.matches("[data-role='trash-link']") ? target : target.closest("[data-role='trash-link']");
-    openUploaderLightboxByFile(link.dataset.file || "", "trash");
+    openUploaderLightboxByFile(link.dataset.file || "", "trash", Number(link.dataset.id || 0));
   }
 });
 
@@ -1326,6 +1464,7 @@ loadHomeDashboardSections();
 refreshDashboardStatus();
 setInterval(refreshDashboardStatus, 5000);
 rebuildUploaderLightboxItems();
+updateFavoriteSelection();
 
 let siteBackgroundObjectUrl = null;
 

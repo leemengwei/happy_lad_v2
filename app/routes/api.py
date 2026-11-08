@@ -12,7 +12,8 @@ import tempfile
 import threading
 import textwrap
 import time
-from flask import Blueprint, current_app, jsonify, request, url_for, send_from_directory
+import zipfile
+from flask import Blueprint, current_app, jsonify, request, url_for, send_from_directory, send_file
 from werkzeug.utils import secure_filename
 from PIL import Image, ExifTags
 from pillow_heif import register_heif_opener
@@ -1379,3 +1380,89 @@ def download_uploader_media(media_id: int):
         as_attachment=True,
         download_name=item["original_name"] or os.path.basename(item["storage_path"]),
     )
+
+
+@api_bp.get("/uploader/favorites")
+def list_uploader_favorites():
+    media_library, error = _get_media_library_or_error()
+    if error:
+        return error
+    uploads_dir, error = _get_uploads_dir_or_error()
+    if error:
+        return error
+    items = media_library.list_favorites()
+    for item in items:
+        storage_path = item.get("storage_path") or ""
+        poster_path = item.get("poster_path") or ""
+        item["media_url"] = url_for("dashboard.uploaded_media", filename=storage_path) if storage_path else ""
+        item["poster_url"] = url_for("dashboard.uploaded_media", filename=poster_path) if poster_path and os.path.isfile(os.path.join(uploads_dir, poster_path)) else ""
+    return jsonify({"items": items, "count": len(items)})
+
+
+@api_bp.post("/uploader/favorites")
+def set_uploader_favorite():
+    payload = request.get_json(force=True, silent=True) or {}
+    try:
+        media_id = int(payload.get("id"))
+    except (TypeError, ValueError):
+        return _bad_request("id must be integer")
+    favorited = payload.get("favorited")
+    if not isinstance(favorited, bool):
+        return _bad_request("favorited must be boolean")
+    media_library, error = _get_media_library_or_error()
+    if error:
+        return error
+    result = media_library.set_favorite(media_id, favorited)
+    if not result.get("updated"):
+        return jsonify({"error": "media not found"}), 404
+    return jsonify({"status": "ok", **result})
+
+
+@api_bp.post("/uploader/favorites/download")
+def download_uploader_favorites():
+    payload = request.get_json(force=True, silent=True) or {}
+    raw_ids = payload.get("ids")
+    if not isinstance(raw_ids, list) or not raw_ids:
+        return _bad_request("select at least one favorite")
+    if len(raw_ids) > 200:
+        return _bad_request("select at most 200 favorites at a time")
+    try:
+        media_ids = list(dict.fromkeys(int(value) for value in raw_ids))
+    except (TypeError, ValueError):
+        return _bad_request("ids must contain integers")
+    media_library, error = _get_media_library_or_error()
+    if error:
+        return error
+    uploads_dir, error = _get_uploads_dir_or_error()
+    if error:
+        return error
+    items = media_library.get_favorite_media(media_ids)
+    if not items:
+        return jsonify({"error": "no selected favorites are available"}), 404
+    root = os.path.realpath(uploads_dir)
+    file_entries = []
+    for item in items:
+        media_path = os.path.realpath(os.path.join(root, item["storage_path"]))
+        if not media_path.startswith(root + os.sep) or not os.path.isfile(media_path):
+            return jsonify({"error": "one of the selected media files is missing"}), 409
+        file_entries.append((item, media_path))
+    archive_path = None
+    try:
+        with tempfile.NamedTemporaryFile(prefix="favorites-", suffix=".zip", dir=os.path.dirname(media_library.db_path), delete=False) as temp_file:
+            archive_path = temp_file.name
+        used_names = set()
+        with zipfile.ZipFile(archive_path, "w", compression=zipfile.ZIP_STORED) as archive:
+            for item, media_path in file_entries:
+                name = os.path.basename(item.get("original_name") or media_path)
+                if name in used_names:
+                    stem, ext = os.path.splitext(name)
+                    name = f"{stem} ({item['id']}){ext}"
+                used_names.add(name)
+                archive.write(media_path, arcname=name)
+        response = send_file(archive_path, mimetype="application/zip", as_attachment=True, download_name="炒鸡喜欢.zip")
+        response.call_on_close(lambda: os.path.exists(archive_path) and os.remove(archive_path))
+        return response
+    except Exception:
+        if archive_path and os.path.exists(archive_path):
+            os.remove(archive_path)
+        raise

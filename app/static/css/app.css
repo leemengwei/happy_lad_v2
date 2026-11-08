@@ -587,6 +587,108 @@ body.has-site-background .site-romance {
   display: inline-block;
 }
 
+.uploader-heading-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.uploader-heading-row h1 {
+  margin: 14px 0;
+}
+
+.favorites-entry {
+  text-decoration: none;
+}
+
+.favorites-page {
+  margin-top: 18px;
+}
+
+.favorites-toolbar {
+  align-items: center;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+
+.favorites-select-all {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.58);
+}
+
+.favorites-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: 14px;
+  padding: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.4);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.38);
+}
+
+.favorite-card {
+  position: relative;
+  min-width: 0;
+}
+
+.favorite-card .uploader-item {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.favorite-check-label {
+  position: absolute;
+  z-index: 3;
+  top: 8px;
+  left: 8px;
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  background: rgba(8, 13, 28, 0.75);
+  cursor: pointer;
+}
+
+.favorite-check-label input {
+  width: 18px;
+  height: 18px;
+  margin: 0;
+}
+
+.favorite-remove {
+  position: absolute;
+  z-index: 3;
+  top: 8px;
+  right: 8px;
+  width: 32px;
+  height: 32px;
+  border: 0;
+  border-radius: 50%;
+  background: rgba(8, 13, 28, 0.75);
+  color: #ff5b73;
+  font-size: 22px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.favorites-empty {
+  grid-column: 1 / -1;
+  padding: 28px 12px;
+  text-align: center;
+}
+
+.favorites-download-status {
+  min-height: 1.5em;
+  margin-top: 10px;
+}
+
 .uploader-lightbox-stage {
   width: 100%;
   height: 100%;
@@ -860,6 +962,26 @@ body.has-site-background .site-romance {
   padding: 8px 10px;
   font-size: 0.86rem;
   cursor: pointer;
+}
+
+.lightbox-favorite {
+  border: 1px solid rgba(255, 136, 158, 0.46);
+  border-radius: 7px;
+  padding: 8px 10px;
+  background: rgba(114, 27, 50, 0.92);
+  color: #fff;
+  font-size: 0.86rem;
+  cursor: pointer;
+}
+
+.lightbox-favorite[aria-pressed="true"] {
+  background: #c92f55;
+  border-color: #ff8fa7;
+}
+
+.lightbox-favorite:disabled {
+  opacity: 0.62;
+  cursor: wait;
 }
 
 .lightbox-close {

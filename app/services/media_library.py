@@ -56,6 +56,14 @@ class MediaLibrary:
             )
             conn.execute(
                 """
+                CREATE TABLE IF NOT EXISTS media_favorites (
+                    media_id INTEGER PRIMARY KEY,
+                    created_at TEXT NOT NULL
+                )
+                """
+            )
+            conn.execute(
+                """
                 CREATE TABLE IF NOT EXISTS media_danmu (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     media_id INTEGER NOT NULL,
@@ -267,6 +275,73 @@ class MediaLibrary:
         finally:
             conn.close()
 
+    def set_favorite(self, media_id: int, favorited: bool) -> Dict:
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            media = conn.execute(
+                "SELECT id FROM media WHERE id = ? AND deleted_at IS NULL",
+                (int(media_id),),
+            ).fetchone()
+            if media is None:
+                conn.rollback()
+                return {"updated": False, "reason": "not_found"}
+            if favorited:
+                conn.execute(
+                    "INSERT OR IGNORE INTO media_favorites (media_id, created_at) VALUES (?, ?)",
+                    (int(media_id), datetime.datetime.now().isoformat()),
+                )
+            else:
+                conn.execute("DELETE FROM media_favorites WHERE media_id = ?", (int(media_id),))
+            conn.commit()
+            return {"updated": True, "id": int(media_id), "favorited": bool(favorited)}
+        finally:
+            conn.close()
+
+    def list_favorites(self) -> List[Dict]:
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        try:
+            rows = conn.execute(
+                """
+                SELECT m.id, m.original_name, m.stored_name, m.ext, m.mime_type,
+                       m.size_bytes, m.media_type, m.storage_path, m.media_url,
+                       m.poster_path, m.poster_url, m.captured_at, m.latitude,
+                       m.longitude, m.location_text, m.created_at,
+                       f.created_at AS favorited_at, 1 AS is_favorite
+                FROM media_favorites f
+                JOIN media m ON m.id = f.media_id
+                WHERE m.deleted_at IS NULL
+                ORDER BY f.created_at DESC, m.id DESC
+                """
+            ).fetchall()
+            return [dict(row) for row in rows]
+        finally:
+            conn.close()
+
+    def get_favorite_media(self, media_ids: List[int]) -> List[Dict]:
+        safe_ids = list(dict.fromkeys(int(media_id) for media_id in media_ids))
+        if not safe_ids:
+            return []
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        try:
+            placeholders = ",".join("?" for _ in safe_ids)
+            rows = conn.execute(
+                f"""
+                SELECT m.id, m.original_name, m.storage_path, m.size_bytes
+                FROM media_favorites f
+                JOIN media m ON m.id = f.media_id
+                WHERE m.deleted_at IS NULL AND m.id IN ({placeholders})
+                ORDER BY f.created_at DESC, m.id DESC
+                """,
+                safe_ids,
+            ).fetchall()
+            return [dict(row) for row in rows]
+        finally:
+            conn.close()
+
     def list_media_paginated(
         self,
         *,
@@ -304,7 +379,8 @@ class MediaLibrary:
                 f"""
                 SELECT id, original_name, stored_name, ext, mime_type, size_bytes, media_type,
                        storage_path, media_url, poster_path, poster_url, captured_at,
-                       latitude, longitude, location_text, created_at
+                       latitude, longitude, location_text, created_at,
+                       EXISTS (SELECT 1 FROM media_favorites f WHERE f.media_id = media.id) AS is_favorite
                 FROM media
                 WHERE deleted_at IS NULL
                 ORDER BY {order_expr} {safe_sort_order}, id DESC
@@ -399,6 +475,7 @@ class MediaLibrary:
             if row is None:
                 return {"deleted": False, "reason": "not_found"}
             self._remove_media_files(row["storage_path"], row["poster_path"])
+            conn.execute("DELETE FROM media_favorites WHERE media_id = ?", (int(media_id),))
             conn.execute("DELETE FROM media WHERE id = ?", (int(media_id),))
             conn.commit()
             return {"deleted": True, "id": int(media_id)}
@@ -424,6 +501,7 @@ class MediaLibrary:
             for row in rows:
                 self._remove_media_files(row["storage_path"], row["poster_path"])
                 ids.append(int(row["id"]))
+            conn.executemany("DELETE FROM media_favorites WHERE media_id = ?", [(media_id,) for media_id in ids])
             conn.executemany("DELETE FROM media WHERE id = ?", [(media_id,) for media_id in ids])
             conn.commit()
             return len(ids)

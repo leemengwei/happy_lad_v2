@@ -1,0 +1,71 @@
+{% extends 'layout.html' %}
+{% block content %}
+<a class="page-back" href="{{ url_for('dashboard.uploader') }}">← 返回媒体展厅</a>
+<div class="uploader-heading-row">
+  <h1>❤️ 炒鸡喜欢</h1>
+  <span class="muted">这里保存的是媒体引用，不会复制原文件。</span>
+</div>
+
+<section class="favorites-page" data-page="favorites">
+  <div class="actions favorites-toolbar">
+    <label class="favorites-select-all"><input type="checkbox" data-role="favorites-select-all" /> 全选</label>
+    <button class="btn" type="button" data-action="favorites-download" disabled>下载所选</button>
+    <span class="muted" data-role="favorites-selection-status" aria-live="polite">已收藏 {{ favorites|length }} 项</span>
+  </div>
+  <div class="favorites-grid" id="favorites-grid">
+    {% for item in favorites %}
+    <article class="favorite-card" data-role="favorite-card" data-id="{{ item.id }}">
+      <label class="favorite-check-label" aria-label="选择 {{ item.original_name }}">
+        <input type="checkbox" data-role="favorite-check" value="{{ item.id }}" />
+      </label>
+      <a class="recent-item uploader-item {% if item.media_type == 'video' %}media-video{% endif %}"
+         href="{{ item.media_url }}" data-role="uploader-link" data-id="{{ item.id }}"
+         data-file="{{ item.original_name }}" data-storage-path="{{ item.storage_path }}"
+         data-media-type="{{ item.media_type }}" data-poster-url="{{ item.poster_url or '' }}"
+         data-captured-at="{{ item.captured_at or '' }}" data-created-at="{{ item.created_at or '' }}"
+         data-location="{{ item.location_text or '' }}" data-favorited="true">
+        {% if item.media_type == 'image' %}
+        <img src="{{ item.media_url }}" alt="{{ item.original_name }}" loading="lazy" />
+        {% else %}
+        <video src="{{ item.media_url }}" {% if item.poster_url %}poster="{{ item.poster_url }}"{% endif %} preload="metadata" muted playsinline></video>
+        {% endif %}
+        <div class="uploader-meta">{{ item.original_name }}</div>
+      </a>
+      <button class="favorite-remove" type="button" data-action="favorite-remove" data-id="{{ item.id }}" aria-label="取消炒鸡喜欢">♥</button>
+    </article>
+    {% endfor %}
+    <div class="muted favorites-empty" data-role="favorites-empty" {% if favorites %}hidden{% endif %}>还没有“炒鸡喜欢”的媒体，打开图片或视频后点红心即可收藏。</div>
+  </div>
+</section>
+
+<div class="lightbox" data-role="uploader-lightbox" aria-hidden="true">
+  <div class="lightbox-backdrop" data-action="uploader-lightbox-close"></div>
+  <div class="lightbox-dialog uploader-lightbox-dialog" role="dialog" aria-label="收藏媒体预览">
+    <div class="uploader-lightbox-toolbar">
+      <div class="uploader-lightbox-tools">
+        <button class="lightbox-delete" type="button" data-action="uploader-lightbox-delete" aria-label="快速删除">删除当前</button>
+        <button class="lightbox-download" type="button" data-action="uploader-lightbox-download" aria-label="下载当前">下载当前</button>
+        <button class="lightbox-favorite" type="button" data-action="uploader-favorite" aria-pressed="false">♡ 炒鸡喜欢</button>
+      </div>
+      <button class="lightbox-close" type="button" data-action="uploader-lightbox-close" aria-label="关闭">×</button>
+    </div>
+    <div class="uploader-lightbox-main">
+      <button class="lightbox-nav prev" type="button" data-action="uploader-lightbox-prev" aria-label="上一张">‹</button>
+      <div class="uploader-lightbox-stage" data-role="uploader-lightbox-stage"></div>
+      <div class="danmu-layer" data-role="uploader-danmu-layer"></div>
+      <button class="lightbox-nav next" type="button" data-action="uploader-lightbox-next" aria-label="下一张">›</button>
+    </div>
+    <div class="lightbox-meta" data-role="uploader-lightbox-meta"></div>
+    <div class="lightbox-status" data-role="uploader-lightbox-status"></div>
+    <details class="uploader-interaction" data-role="uploader-danmu-details">
+      <summary>弹幕（默认折叠）</summary>
+      <div class="uploader-interaction-list" data-role="uploader-danmu-list"></div>
+      <div class="uploader-interaction-actions">
+        <input type="text" maxlength="80" placeholder="弹幕内容..." data-role="uploader-danmu-input" />
+        <button class="btn" type="button" data-action="uploader-send-danmu">发弹幕</button>
+      </div>
+    </details>
+  </div>
+</div>
+<div class="favorites-download-status muted" data-role="favorites-download-status" aria-live="polite"></div>
+{% endblock %}

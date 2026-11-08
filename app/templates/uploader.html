@@ -13,6 +13,7 @@
   data-captured-at="{{ item.captured_at or '' }}"
   data-created-at="{{ item.created_at or '' }}"
   data-location="{{ item.location_text or '' }}"
+  data-favorited="{{ 'true' if item.is_favorite else 'false' }}"
 >
   {% if item.media_type == 'image' %}
   <img src="{{ item.media_url }}" alt="{{ item.original_name }}" loading="lazy" />
@@ -47,7 +48,10 @@
 </div>
 {%- endmacro %}
 <a class="page-back" href="http://192.168.0.100:5000/">← 返回快乐家园</a>
-<h1>小帽子媒体上传</h1>
+<div class="uploader-heading-row">
+  <h1>小帽子媒体上传</h1>
+  <a class="btn secondary favorites-entry" href="{{ url_for('dashboard.favorites') }}">❤️ 炒鸡喜欢</a>
+</div>
 {% if storage_unavailable %}
 <section class="card">
   <div class="muted" style="color: #b42318;">{{ storage_error or "相册存储不可用。" }}</div>
@@ -164,6 +168,7 @@
       <div class="uploader-lightbox-tools">
         <button class="lightbox-delete" type="button" data-action="uploader-lightbox-delete" aria-label="快速删除">删除当前</button>
         <button class="lightbox-download" type="button" data-action="uploader-lightbox-download" aria-label="下载当前">下载当前</button>
+        <button class="lightbox-favorite" type="button" data-action="uploader-favorite" aria-pressed="false">♡ 炒鸡喜欢</button>
       </div>
       <button class="lightbox-close" type="button" data-action="uploader-lightbox-close" aria-label="关闭">×</button>
     </div>

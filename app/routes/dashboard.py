@@ -1,5 +1,6 @@
 import time
 import datetime
+import os
 from flask import Blueprint, current_app, render_template, Response, abort, send_from_directory, url_for, request
 
 
@@ -204,6 +205,28 @@ def uploader():
         sort_by=result["sort_by"],
         sort_order=result["sort_order"],
     )
+
+
+@dashboard_bp.route("/favorites")
+def favorites():
+    if not current_app.config.get("UPLOADER_STORAGE_READY"):
+        return render_template(
+            "uploader.html",
+            storage_unavailable=True,
+            storage_error=current_app.config.get("UPLOADER_STORAGE_ERROR", "相册存储不可用。"),
+        )
+    media_library = current_app.config["MEDIA_LIBRARY"]
+    uploads_dir = current_app.config.get("UPLOADS_DIR") or ""
+    items = media_library.list_favorites()
+    for item in items:
+        storage_path = item.get("storage_path") or ""
+        poster_path = item.get("poster_path") or ""
+        item["media_url"] = url_for("dashboard.uploaded_media", filename=storage_path) if storage_path else ""
+        item["poster_url"] = (
+            url_for("dashboard.uploaded_media", filename=poster_path)
+            if poster_path and os.path.isfile(os.path.join(uploads_dir, poster_path)) else ""
+        )
+    return render_template("favorites.html", favorites=items, title="炒鸡喜欢")
 
 
 @dashboard_bp.route("/camera/<camera_id>")
