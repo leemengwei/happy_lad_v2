@@ -781,17 +781,23 @@ body.has-site-background .site-romance {
   animation: lbZoomIn 0.2s ease;
 }
 
+.uploader-lightbox-dialog {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  box-sizing: border-box;
+}
+
 .uploader-lightbox-toolbar {
-  position: absolute;
-  top: 12px;
-  left: 12px;
-  right: 12px;
+  position: relative;
+  inset: auto;
+  flex: 0 0 40px;
   display: flex;
   justify-content: space-between;
   align-items: center;
   gap: 10px;
-  z-index: 10;
-  pointer-events: none;
+  z-index: 4;
 }
 
 .uploader-lightbox-tools {
@@ -802,14 +808,17 @@ body.has-site-background .site-romance {
 }
 
 .uploader-lightbox-main {
-  position: absolute;
-  inset: 0;
-  z-index: 2;
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  width: 100%;
+  z-index: 1;
 }
 
 .uploader-lightbox-stage {
   position: absolute;
   inset: 0;
+  z-index: 0;
   background: #0f121a;
   overflow: hidden;
   border-radius: 0;
@@ -892,12 +901,16 @@ body.has-site-background .site-romance {
   pointer-events: auto;
 }
 
+.uploader-lightbox-toolbar .lightbox-close {
+  position: relative;
+  inset: auto;
+  flex: 0 0 36px;
+}
+
 .lightbox-meta {
-  position: absolute;
-  left: 12px;
-  right: 12px;
-  bottom: 118px;
-  z-index: 8;
+  position: relative;
+  flex: 0 0 auto;
+  z-index: 1;
   color: #dbe2ff;
   font-size: 0.92rem;
   padding: 8px 10px;
@@ -910,11 +923,11 @@ body.has-site-background .site-romance {
   position: absolute;
   left: 72px;
   right: 72px;
-  top: 56px;
-  bottom: 172px;
+  top: 12px;
+  bottom: 12px;
   pointer-events: none;
   overflow: hidden;
-  z-index: 6;
+  z-index: 2;
 }
 
 .danmu-item {
@@ -971,11 +984,9 @@ body.has-site-background .site-romance {
 }
 
 .lightbox-status {
-  position: absolute;
-  left: 12px;
-  right: 12px;
-  bottom: 76px;
-  z-index: 8;
+  position: relative;
+  flex: 0 0 auto;
+  z-index: 1;
   color: #c5d2ff;
   font-size: 0.84rem;
   background: rgba(8, 13, 28, 0.5);
@@ -1048,11 +1059,9 @@ body.has-site-background .site-romance {
 }
 
 .uploader-interaction {
-  position: absolute;
-  left: 12px;
-  right: 12px;
-  bottom: 12px;
-  z-index: 9;
+  position: relative;
+  flex: 0 0 auto;
+  z-index: 1;
   border-top: 1px solid rgba(160, 177, 238, 0.25);
   padding: 8px;
   border-radius: 8px;
@@ -1270,8 +1279,13 @@ body.has-site-background .site-romance {
     padding: 0;
   }
 
+  .uploader-lightbox-dialog {
+    padding: 8px;
+    gap: 6px;
+  }
+
   .uploader-lightbox-main {
-    inset: 0;
+    inset: auto;
   }
 
   .uploader-lightbox-stage {
@@ -1287,8 +1301,8 @@ body.has-site-background .site-romance {
   .danmu-layer {
     left: 8px;
     right: 8px;
-    top: 52px;
-    bottom: 210px;
+    top: 8px;
+    bottom: 8px;
   }
 }
 
