@@ -9,7 +9,7 @@ cameras:
   sample_sound_volume: 0.67
   sampling:
     cooldown_hours: 24.0
-    time_span_years: 5.0
+    expected_samples_per_person_hour: 10.0
   storage_dir: /home/feifeichouchou/happy_lad_v2/images/cam0
   width: 1920
 - device: /dev/v4l/by-path/platform-3610000.xhci-usb-0:2.4:1.0-video-index0
@@ -22,7 +22,7 @@ cameras:
   sample_sound_volume: 0.67
   sampling:
     cooldown_hours: 24.0
-    time_span_years: 5.0
+    expected_samples_per_person_hour: 10.0
   storage_dir: /home/feifeichouchou/happy_lad_v2/images/cam1
   width: 1920
 system:

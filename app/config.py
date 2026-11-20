@@ -5,8 +5,8 @@ from typing import List, Optional
 
 @dataclass
 class SamplingConfig:
-    time_span_years: float
     cooldown_hours: float
+    expected_samples_per_person_hour: float
 
 
 @dataclass
@@ -62,8 +62,10 @@ def load_config(path: str) -> AppConfig:
                 sample_sound_volume=min(1.0, max(0.0, float(raw.get("sample_sound_volume", 1.0)))),
                 recent_samples_limit=max(0, int(raw.get("recent_samples_limit", 16))),
                 sampling=SamplingConfig(
-                    time_span_years=float(sampling.get("time_span_years", 10)),
                     cooldown_hours=float(sampling.get("cooldown_hours", 24)),
+                    expected_samples_per_person_hour=float(
+                        sampling.get("expected_samples_per_person_hour", 1.0)
+                    ),
                 ),
             )
         )

@@ -1,4 +1,3 @@
-import time
 import datetime
 import os
 from flask import Blueprint, current_app, render_template, Response, abort, send_from_directory, url_for, request
@@ -259,35 +258,19 @@ def camera_stream(camera_id: str):
     pipeline = manager.get_pipeline(camera_id)
 
     def generate():
+        sequence = 0
         while True:
-            frame = pipeline.get_latest_jpeg()
+            sequence, frame = pipeline.get_jpeg_after(sequence, timeout=1.0)
             if frame:
                 yield (
                     b"--frame\r\n"
                     b"Content-Type: image/jpeg\r\n\r\n" + frame + b"\r\n"
                 )
-            time.sleep(0.1)
 
     response = Response(generate(), mimetype="multipart/x-mixed-replace; boundary=frame")
     response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
     response.headers["X-Accel-Buffering"] = "no"
     return response
-
-
-@dashboard_bp.route("/frame/<camera_id>")
-def camera_frame(camera_id: str):
-    """Return one JPEG so mobile browsers can refresh previews without MJPEG."""
-    manager = _get_manager()
-    if camera_id not in manager.pipelines:
-        abort(404)
-    frame = manager.get_pipeline(camera_id).get_latest_jpeg()
-    if not frame:
-        return Response(status=204, headers={"Cache-Control": "no-store"})
-    return Response(
-        frame,
-        mimetype="image/jpeg",
-        headers={"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0"},
-    )
 
 
 @dashboard_bp.route("/media/<camera_id>/<path:filename>")

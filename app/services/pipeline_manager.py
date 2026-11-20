@@ -1,14 +1,16 @@
 import datetime
 import logging
 import os
+import shutil
 import subprocess
 import threading
 import time
+from collections import defaultdict
 from typing import Dict, Optional
 
 from app.config import AppConfig
 from app.services.pipeline import DeepStreamPipeline
-from app.services.sampling import SamplingPolicy
+from app.services.sampling import SamplingBudget, SamplingPolicy
 from app.services.storage import Storage
 
 logger = logging.getLogger(__name__)
@@ -23,12 +25,44 @@ class PipelineManager:
         self._abnormal_since: Optional[datetime.datetime] = None
         self._last_reboot_attempt_at: Optional[datetime.datetime] = None
 
+        storages = {camera.id: Storage(camera.storage_dir) for camera in config.cameras}
+        cameras_by_filesystem = defaultdict(list)
         for camera in config.cameras:
-            sampling_policy = SamplingPolicy(
-                time_span_years=camera.sampling.time_span_years,
-                cooldown_hours=camera.sampling.cooldown_hours,
+            filesystem_id = os.stat(storages[camera.id].base_dir).st_dev
+            cameras_by_filesystem[filesystem_id].append(camera)
+
+        sampling_budgets = {}
+        for cameras in cameras_by_filesystem.values():
+            storage_dir = storages[cameras[0].id].base_dir
+            usage = shutil.disk_usage(storage_dir)
+            reserve_bytes = max(int(usage.total * 0.05), 5 * 1024**3)
+            budget_bytes = max(0, usage.free - reserve_bytes)
+            sampling_budget = SamplingBudget(budget_bytes, reserve_bytes)
+            logger.info(
+                "Sampling disk budget configured (filesystem=%s, free_bytes=%d, reserve_bytes=%d, sampling_budget_bytes=%d, camera_count=%d)",
+                storage_dir,
+                usage.free,
+                reserve_bytes,
+                budget_bytes,
+                len(cameras),
             )
-            storage = Storage(camera.storage_dir)
+            for camera in cameras:
+                storages[camera.id].minimum_free_bytes = reserve_bytes
+                sampling_budgets[camera.id] = {
+                    "target_bytes": budget_bytes,
+                    "minimum_free_bytes": reserve_bytes,
+                    "average_sample_bytes": storages[camera.id].average_sample_size(),
+                    "sampling_budget": sampling_budget,
+                    "camera_id": camera.id,
+                }
+
+        for camera in config.cameras:
+            budget = sampling_budgets[camera.id]
+            sampling_policy = SamplingPolicy(
+                cooldown_hours=camera.sampling.cooldown_hours,
+                expected_samples_per_person_hour=camera.sampling.expected_samples_per_person_hour,
+                **budget,
+            )
             pipeline = DeepStreamPipeline(
                 camera_id=camera.id,
                 camera_name=camera.name,
@@ -37,7 +71,7 @@ class PipelineManager:
                 height=camera.height,
                 model_config=camera.model_config,
                 sampling_policy=sampling_policy,
-                storage=storage,
+                storage=storages[camera.id],
                 sample_sound_file=camera.sample_sound_file,
                 sample_sound_volume=camera.sample_sound_volume,
                 recent_samples_limit=camera.recent_samples_limit,

@@ -9,36 +9,13 @@ function setPreviewBySnoozeState(container, snoozing) {
 
   if (snoozing) {
     preview.dataset.sleeping = "true";
-    clearTimeout(preview.homeFrameTimer);
     preview.src = snoozeSrc;
     preview.alt = "小猪睡觉中";
   } else {
     preview.dataset.sleeping = "false";
-    preview.src = preview.dataset.frameSrc || streamSrc;
+    preview.src = streamSrc;
     preview.alt = "实时画面";
   }
-}
-
-function startHomeCameraFrameRefresh(preview, frameUrl) {
-  const refresh = (delay) => {
-    clearTimeout(preview.homeFrameTimer);
-    preview.homeFrameTimer = setTimeout(() => {
-      if (document.hidden) {
-        refresh(1000);
-        return;
-      }
-      preview.src = `${frameUrl}${frameUrl.includes("?") ? "&" : "?"}_=${Date.now()}`;
-    }, delay);
-  };
-  preview.addEventListener("load", () => {
-    if (preview.dataset.sleeping !== "true") refresh(700);
-  });
-  preview.addEventListener("error", () => {
-    if (preview.dataset.sleeping !== "true") refresh(1800);
-  });
-  document.addEventListener("visibilitychange", () => {
-    if (!document.hidden && preview.isConnected && preview.dataset.sleeping !== "true") refresh(0);
-  });
 }
 
 function formatLastFrameText(lastFrameIso, ageSeconds) {
@@ -53,20 +30,18 @@ function formatLastFrameText(lastFrameIso, ageSeconds) {
 function buildHomeCameraUrls(cameraId) {
   const config = document.querySelector("[data-role='home-camera-config']");
   const streamPrefix = config?.dataset.streamPrefix || "";
-  const framePrefix = config?.dataset.framePrefix || streamPrefix;
   const detailPrefix = config?.dataset.detailPrefix || "";
   const snoozeImage = config?.dataset.snoozeImage || "";
   const encodedId = encodeURIComponent(cameraId || "");
   return {
     streamUrl: streamPrefix.replace("__camera_id__", encodedId),
-    frameUrl: framePrefix.replace("__camera_id__", encodedId),
     detailUrl: detailPrefix.replace("__camera_id__", encodedId),
     snoozeImage,
   };
 }
 
 function createHomeCameraCard(camera) {
-  const { streamUrl, frameUrl, detailUrl, snoozeImage } = buildHomeCameraUrls(camera.camera_id);
+  const { streamUrl, detailUrl, snoozeImage } = buildHomeCameraUrls(camera.camera_id);
   const card = document.createElement("section");
   card.className = "card";
   card.dataset.cameraId = camera.camera_id;
@@ -82,6 +57,7 @@ function createHomeCameraCard(camera) {
       <div data-role="last-frame"></div>
       <div data-role="running-status"></div>
       <div data-role="snooze-status"></div>
+      <div class="sampling-live" data-role="sampling-live" aria-live="polite"></div>
       <div class="muted" data-role="snapshot-status"></div>
     </div>
     <div class="actions">
@@ -102,11 +78,9 @@ function createHomeCameraCard(camera) {
   title.textContent = camera.camera_name || camera.camera_id || "未命名摄像头";
   device.textContent = camera.device || "";
   preview.dataset.streamSrc = streamUrl;
-  preview.dataset.frameSrc = frameUrl;
   preview.dataset.snoozeSrc = snoozeImage;
   preview.dataset.sleeping = String(Boolean(camera.snoozing));
-  preview.src = camera.snoozing ? snoozeImage : frameUrl;
-  if (!camera.snoozing) startHomeCameraFrameRefresh(preview, frameUrl);
+  preview.src = camera.snoozing ? snoozeImage : streamUrl;
   preview.alt = camera.snoozing ? "小猪睡觉中" : (camera.camera_name || "实时画面");
   lastFrame.textContent = formatLastFrameText(camera.last_frame_time, camera.last_frame_age_seconds);
   runningStatus.textContent = `状态: ${camera.running ? "运行中" : "停止"}`;
@@ -116,11 +90,43 @@ function createHomeCameraCard(camera) {
   } else {
     snoozeStatus.textContent = "瞌睡: 关闭";
   }
+  updateSamplingCard(card, camera);
   detailLink.href = detailUrl;
   actionButtons.forEach((btn) => {
     btn.dataset.id = camera.camera_id;
   });
   return card;
+}
+
+function formatRate(value, digits = 2) {
+  return value !== null && value !== undefined && value !== "" && Number.isFinite(Number(value))
+    ? Number(value).toFixed(digits)
+    : "—";
+}
+
+function updateSamplingCard(card, camera) {
+  const target = card.querySelector("[data-role='sampling-live']");
+  if (!target) return;
+  const sampling = camera.sampling || {};
+  const decisionFps = Number(sampling.decision_fps);
+  const probability = sampling.sample_probability_if_human_frame == null ? NaN : Number(sampling.sample_probability_if_human_frame);
+  const expectedPerPersonPerHour = Number(sampling.expected_samples_per_person_hour);
+  const people = camera.last_person_count;
+  const peopleText = people != null && Number.isFinite(Number(people)) ? `${people} 人` : "等待检测";
+  const age = Number(camera.last_frame_age_seconds);
+  const live = camera.running && Number.isFinite(age) && age <= 20;
+  const status = !camera.running ? "管线已停止" : !live ? "暂无新帧，数据可能已过期" :
+    Number(people) > 0 ? `当前有人（${peopleText}），按设置概率采样` : "当前无人，不采样";
+  target.innerHTML = `
+    <div class="sampling-live-title">实时采样状态 <span class="sampling-live-indicator ${live ? "is-live" : ""}">${live ? "实时" : "未更新"}</span></div>
+    <div class="sampling-live-grid">
+      <div><strong>${formatRate(decisionFps, 2)}</strong><span>实时帧率（检测 / 展示 / 回传）</span></div>
+      <div><strong>${peopleText}</strong><span>最近检测人数</span></div>
+      <div><strong>${Number.isFinite(probability) ? `${(probability * 100).toFixed(4)}%` : "—"}</strong><span>检测到有人时的抽中率</span></div>
+      <div><strong>${formatRate(expectedPerPersonPerHour, 2)} 张/人/小时</strong><span>持续有人时的目标期望</span></div>
+    </div>
+    <div class="sampling-live-note">${status}。期望 1 表示持续检测到 1 人时每小时平均采 1 张；检测不到人不采样。多人同框时，一张图片同时计入每个可见人的采样。</div>
+  `;
 }
 
 function createHomeMediaItem(item) {
@@ -221,6 +227,7 @@ async function refreshDashboardStatus() {
       if (runningStatus) {
         runningStatus.textContent = `状态: ${camera.running ? "运行中" : "停止"}`;
       }
+      updateSamplingCard(card, camera);
 
       const lastFrame = card.querySelector("[data-role='last-frame']");
       if (lastFrame) {
@@ -634,7 +641,7 @@ if (form) {
     const payload = {
       name: form.name.value,
       sampling: {
-        time_span_years: parseFloat(form.time_span_years.value),
+        expected_samples_per_person_hour: parseFloat(form.expected_samples_per_person_hour.value),
         cooldown_hours: parseFloat(form.cooldown_hours.value),
       },
       recent_samples_limit: parseInt(form.recent_samples_limit.value, 10),
@@ -1462,7 +1469,7 @@ applySampleFilter();
 rebuildLightboxItems();
 loadHomeDashboardSections();
 refreshDashboardStatus();
-setInterval(refreshDashboardStatus, 5000);
+setInterval(refreshDashboardStatus, 2000);
 rebuildUploaderLightboxItems();
 updateFavoriteSelection();
 

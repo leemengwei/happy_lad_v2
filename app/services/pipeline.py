@@ -51,9 +51,7 @@ class DeepStreamPipeline:
         self.sample_sound_volume = min(1.0, max(0.0, float(sample_sound_volume)))
         self.recent_samples_limit = recent_samples_limit
         self.sampling_state = SamplingState(
-            last_sample_time=datetime.datetime.now().replace(
-                hour=12, minute=0, second=0, microsecond=0
-            )
+            last_sample_time=datetime.datetime.now(),
         )
 
         self.pipeline = self._build_pipeline()
@@ -63,18 +61,18 @@ class DeepStreamPipeline:
         self._bus_handler_id: Optional[int] = None
 
         self._latest_jpeg: Optional[bytes] = None
-        self._jpeg_lock = threading.Lock()
+        self._jpeg_condition = threading.Condition()
+        self._jpeg_sequence = 0
         self._status_lock = threading.Lock()
         self._last_frame_time: Optional[datetime.datetime] = None
+        self._last_person_count: Optional[int] = None
+        self._input_frame_count = 0
+        self._input_fps: Optional[float] = None
+        self._input_last_monotonic: Optional[float] = None
         self._last_start_time: Optional[datetime.datetime] = None
         self._running = False
         self._snooze_until: Optional[datetime.datetime] = None
         self._sound_warned = False
-        self._preview_interval = 2.0
-        self._next_preview_at = 0.0
-        # The source is fixed at 30 FPS and PGIE interval=5, so inference
-        # produces a new decision frame once every six source frames.
-        self._decision_counter = 0
         self._capture_lock = threading.Lock()
         self._capture_pending = False
         self._capture_last_result: Optional[dict] = None
@@ -109,6 +107,9 @@ class DeepStreamPipeline:
 
         source.set_property("device", self.device)
         source.set_property("io-mode", 2)
+        source.get_static_pad("src").add_probe(
+            Gst.PadProbeType.BUFFER, self._input_frame_probe
+        )
         caps = Gst.Caps.from_string(
             f"image/jpeg, width={self.width}, height={self.height}, framerate=30/1"
         )
@@ -120,7 +121,12 @@ class DeepStreamPipeline:
         decode_caps.set_property(
             "caps", Gst.Caps.from_string("video/x-raw(memory:NVMM),format=NV12")
         )
-        caps_filter2.set_property("caps", Gst.Caps.from_string("video/x-raw(memory:NVMM),format=RGBA"))
+        caps_filter2.set_property(
+            "caps",
+            Gst.Caps.from_string(
+                f"video/x-raw(memory:NVMM),format=RGBA,width={self.width},height={self.height}"
+            ),
+        )
         fakesink.set_property("sync", False)
 
         streammux.set_property("width", self.width)
@@ -166,6 +172,17 @@ class DeepStreamPipeline:
 
         return pipeline
 
+    def _input_frame_probe(self, pad, info):
+        """Measure frames actually delivered by v4l2src to this pipeline."""
+        if info.get_buffer():
+            now = time.monotonic()
+            with self._status_lock:
+                if self._input_last_monotonic is not None and now > self._input_last_monotonic:
+                    self._input_fps = 1.0 / (now - self._input_last_monotonic)
+                self._input_last_monotonic = now
+                self._input_frame_count += 1
+        return Gst.PadProbeReturn.OK
+
     def _sampling_probe(self, pad, info):
         gst_buffer = info.get_buffer()
         if not gst_buffer:
@@ -179,16 +196,6 @@ class DeepStreamPipeline:
                 frame_meta = pyds.NvDsFrameMeta.cast(l_frame.data)
             except StopIteration:
                 break
-
-            self._decision_counter = (self._decision_counter + 1) % 6
-            if self._decision_counter:
-                with self._status_lock:
-                    self._last_frame_time = datetime.datetime.now()
-                try:
-                    l_frame = l_frame.next
-                except StopIteration:
-                    break
-                continue
 
             person_count = 0
             l_obj = frame_meta.obj_meta_list
@@ -208,14 +215,21 @@ class DeepStreamPipeline:
             if snoozing:
                 # A user-requested snapshot must survive snooze. Automatic
                 # sampling remains disabled while snoozing.
-                should_sample = self.sampling_state.force_snapshot
+                self.sampling_state.last_decision_monotonic = time.monotonic()
+                should_sample = (
+                    self.sampling_state.force_snapshot
+                    and self.sampling_state.force_reason == "manual"
+                    and self.storage.has_capacity()
+                )
                 if should_sample:
                     self.sampling_state.force_snapshot = False
+                    self.sampling_state.force_reason = None
                     self.sampling_state.last_sample_time = datetime.datetime.now()
             else:
                 should_sample = self.sampling_policy.should_sample(
                     self.sampling_state,
                     person_count=person_count,
+                    can_capture=self.storage.has_capacity(),
                 )
 
             if self._last_frame_time is None:
@@ -229,6 +243,7 @@ class DeepStreamPipeline:
 
             with self._status_lock:
                 self._last_frame_time = datetime.datetime.now()
+                self._last_person_count = person_count
 
             try:
                 l_frame = l_frame.next
@@ -251,54 +266,46 @@ class DeepStreamPipeline:
             except StopIteration:
                 break
 
-            now_mono = time.monotonic()
             with self._capture_lock:
                 capture = self._capture_pending
-            if now_mono < self._next_preview_at:
-                try:
-                    l_frame = l_frame.next
-                except StopIteration:
-                    break
-                continue
 
-            # Do the expensive GPU-surface -> CPU copy and JPEG conversion only
-            # when the preview is due for refresh, rather than on every frame.
+            # Generate one full-resolution preview from this detected frame.
             frame = pyds.get_nvds_buf_surface(hash(gst_buffer), frame_meta.batch_id)
-            frame_copy = np.array(frame, copy=True, order="C")
-            frame_copy = cv2.cvtColor(frame_copy, cv2.COLOR_RGBA2BGR)
 
             if capture:
+                sample_frame = np.array(frame, copy=True, order="C")
+                sample_frame = cv2.cvtColor(sample_frame, cv2.COLOR_RGBA2BGR)
                 timestamp = time.strftime("%Y/%m/%d %H:%M:%S", time.localtime())
                 cv2.putText(
-                    frame_copy, timestamp, (10, 30), cv2.FONT_HERSHEY_SIMPLEX,
+                    sample_frame, timestamp, (10, 30), cv2.FONT_HERSHEY_SIMPLEX,
                     1, (255, 255, 255), 2, cv2.LINE_AA,
                 )
                 try:
-                    path = self.storage.save_sample(frame_copy, self.camera_name)
+                    path = self.storage.save_sample(sample_frame, self.camera_name)
+                    self.sampling_policy.record_sample_size(os.path.getsize(path))
+                    self.sampling_policy.record_save_result(True)
                     self._play_sample_sound()
                     result = {"ok": True, "path": path, "error": None}
                 except Exception as exc:
+                    self.sampling_policy.record_save_result(False)
                     logger.exception("Snapshot save failed for %s", self.camera_id)
                     result = {"ok": False, "path": None, "error": str(exc)}
                 with self._capture_lock:
                     self._capture_pending = False
                     self._capture_last_result = result
 
-            # The preview retains the detection/status overlay and timestamp.
-            timestamp = time.strftime("%Y/%m/%d %H:%M:%S", time.localtime())
-            cv2.putText(
-                frame_copy, timestamp, (10, 30), cv2.FONT_HERSHEY_SIMPLEX,
-                1, (255, 255, 255), 2, cv2.LINE_AA,
-            )
+            preview_bgr = cv2.cvtColor(frame, cv2.COLOR_RGBA2BGR)
             ret, jpeg = cv2.imencode(
-                ".jpg", frame_copy,
-                [int(cv2.IMWRITE_JPEG_QUALITY), 75],
+                ".jpg", preview_bgr,
+                [int(cv2.IMWRITE_JPEG_QUALITY), 85],
             )
             if ret:
-                with self._jpeg_lock:
+                with self._jpeg_condition:
                     self._latest_jpeg = jpeg.tobytes()
-            self._next_preview_at = now_mono + self._preview_interval
-
+                    self._jpeg_sequence += 1
+                    self._jpeg_condition.notify_all()
+                with self._status_lock:
+                    self._last_frame_time = datetime.datetime.now()
             try:
                 l_frame = l_frame.next
             except StopIteration:
@@ -439,6 +446,7 @@ class DeepStreamPipeline:
     def force_snapshot(self) -> None:
         logger.info("Force snapshot requested for %s", self.camera_id)
         self.sampling_state.force_snapshot = True
+        self.sampling_state.force_reason = "manual"
         with self._capture_lock:
             self._capture_last_result = {"ok": False, "path": None, "error": "pending"}
 
@@ -467,12 +475,25 @@ class DeepStreamPipeline:
             return True
 
     def get_latest_jpeg(self) -> Optional[bytes]:
-        with self._jpeg_lock:
+        with self._jpeg_condition:
             return self._latest_jpeg
+
+    def get_jpeg_after(self, sequence: int, timeout: float = 1.0):
+        """Wait for the next newly encoded camera frame; never replay stale JPEGs."""
+        with self._jpeg_condition:
+            self._jpeg_condition.wait_for(
+                lambda: self._jpeg_sequence > sequence, timeout=timeout
+            )
+            if self._jpeg_sequence <= sequence:
+                return sequence, None
+            return self._jpeg_sequence, self._latest_jpeg
 
     def get_status(self) -> dict:
         with self._status_lock:
             last_frame = self._last_frame_time
+            last_person_count = self._last_person_count
+            input_fps = self._input_fps
+            input_frames = self._input_frame_count
             snooze_until = self._snooze_until
         now = datetime.datetime.now()
         snoozing = bool(snooze_until and snooze_until > now)
@@ -485,12 +506,21 @@ class DeepStreamPipeline:
             "running": self._running,
             "last_frame_time": last_frame.isoformat() if last_frame else None,
             "last_frame_age_seconds": last_frame_age_seconds,
+            "last_person_count": last_person_count,
+            "input_fps": input_fps,
+            "input_frames": input_frames,
             "recent_samples_limit": self.recent_samples_limit,
             "sample_sound_file": self.sample_sound_file,
             "sample_sound_volume": self.sample_sound_volume,
             "sampling": {
-                "time_span_years": self.sampling_policy.time_span_years,
                 "cooldown_hours": self.sampling_policy.cooldown_seconds / 3600,
+                "decision_fps": self.sampling_policy.decision_fps,
+                "expected_samples_per_person_hour": self.sampling_policy.expected_samples_per_person_hour,
+                "sample_probability_if_human_frame": self.sampling_policy.sample_probability_if_human_frame,
+                "target_bytes": self.sampling_policy.target_bytes,
+                "average_sample_bytes": self.sampling_policy.average_sample_bytes,
+                "minimum_free_bytes": self.sampling_policy.minimum_free_bytes,
+                "activity": self.sampling_policy.get_activity(),
             },
             "snoozing": snoozing,
             "snooze_until": snooze_until.isoformat() if snoozing else None,

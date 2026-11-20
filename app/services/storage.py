@@ -1,6 +1,7 @@
 import os
 import datetime
 import logging
+import shutil
 import cv2
 import re
 import uuid
@@ -10,11 +11,45 @@ logger = logging.getLogger(__name__)
 
 
 class Storage:
-    def __init__(self, base_dir: str) -> None:
+    DEFAULT_SAMPLE_BYTES = 512 * 1024
+    WRITE_HEADROOM_BYTES = 5 * 1024 * 1024
+
+    def __init__(self, base_dir: str, minimum_free_bytes: int = 0) -> None:
         self.base_dir = base_dir
+        self.minimum_free_bytes = max(0, int(minimum_free_bytes))
         os.makedirs(self.base_dir, exist_ok=True)
 
+    def average_sample_size(self) -> float:
+        sizes = []
+        for root, _dirs, files in os.walk(self.base_dir):
+            for name in files:
+                if not name.lower().endswith(".jpg") or name == "latest.jpg":
+                    continue
+                try:
+                    size = os.path.getsize(os.path.join(root, name))
+                except OSError:
+                    continue
+                if size > 0:
+                    sizes.append(size)
+        if not sizes:
+            return float(self.DEFAULT_SAMPLE_BYTES)
+        return sum(sizes) / len(sizes)
+
+    def has_capacity(self) -> bool:
+        try:
+            return (
+                shutil.disk_usage(self.base_dir).free
+                > self.minimum_free_bytes + self.WRITE_HEADROOM_BYTES
+            )
+        except OSError:
+            logger.exception("Unable to inspect free space for %s", self.base_dir)
+            return False
+
     def save_sample(self, frame, camera_name: str) -> str:
+        if not self.has_capacity():
+            raise OSError(
+                f"sampling stopped to preserve {self.minimum_free_bytes} bytes of free space"
+            )
         safe_name = re.sub(r"[^A-Za-z0-9_.-]+", "_", str(camera_name)).strip("._") or "camera"
         timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S-%f")
         filename = f"{safe_name}_{timestamp}_{uuid.uuid4().hex[:8]}.jpg"

@@ -18,11 +18,13 @@
       <label>房间名称
         <input type="text" name="name" value="{{ camera.camera_name }}" />
       </label>
-      <label>观察年限
-        <input type="number" step="0.1" name="time_span_years" value="{{ camera.sampling.time_span_years }}" />
+      <label>每人每小时采样期望
+        <input type="number" min="0" step="0.1" name="expected_samples_per_person_hour" value="{{ camera.sampling.expected_samples_per_person_hour }}" />
+        <span class="muted">设为 1：持续检测到 1 个人时，平均每小时采 1 张；设为 2 时平均每小时采 2 张。多人同框时，一张图片同时计入每个可见的人。</span>
       </label>
       <label>冷却时间（小时）
         <input type="number" step="0.1" name="cooldown_hours" value="{{ camera.sampling.cooldown_hours }}" />
+        <span class="muted">概率抽样长时间未命中时兜底；只有检测到有人且采样配额未用完时才触发。</span>
       </label>
       <label>最近采样张数
         <input type="number" step="1" min="0" name="recent_samples_limit" value="{{ camera.recent_samples_limit }}" />

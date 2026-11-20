@@ -2,6 +2,7 @@ import yaml
 import hashlib
 import io
 import logging
+import math
 import uuid
 from logging.handlers import RotatingFileHandler
 import os
@@ -718,16 +719,22 @@ def update_camera_config(camera_id: str):
             return _bad_request("sampling must be object")
         target.setdefault("sampling", {})
         sampling_payload = payload["sampling"]
-        if "time_span_years" in sampling_payload:
-            try:
-                target["sampling"]["time_span_years"] = float(sampling_payload["time_span_years"])
-            except (TypeError, ValueError):
-                return _bad_request("sampling.time_span_years must be number")
         if "cooldown_hours" in sampling_payload:
             try:
-                target["sampling"]["cooldown_hours"] = float(sampling_payload["cooldown_hours"])
+                cooldown_hours = float(sampling_payload["cooldown_hours"])
             except (TypeError, ValueError):
                 return _bad_request("sampling.cooldown_hours must be number")
+            if not math.isfinite(cooldown_hours) or cooldown_hours < 0:
+                return _bad_request("sampling.cooldown_hours must be finite and non-negative")
+            target["sampling"]["cooldown_hours"] = cooldown_hours
+        if "expected_samples_per_person_hour" in sampling_payload:
+            try:
+                expected_samples = float(sampling_payload["expected_samples_per_person_hour"])
+            except (TypeError, ValueError):
+                return _bad_request("sampling.expected_samples_per_person_hour must be number")
+            if not math.isfinite(expected_samples) or expected_samples < 0:
+                return _bad_request("sampling.expected_samples_per_person_hour must be finite and non-negative")
+            target["sampling"]["expected_samples_per_person_hour"] = expected_samples
     if "recent_samples_limit" in payload:
         try:
             target["recent_samples_limit"] = int(payload["recent_samples_limit"])
@@ -749,10 +756,20 @@ def update_camera_config(camera_id: str):
     if error:
         return error
     sampling = target.get("sampling", {})
-    pipeline.sampling_policy = SamplingPolicy(
-        time_span_years=float(sampling.get("time_span_years", 10)),
+    current_policy = pipeline.sampling_policy
+    updated_policy = SamplingPolicy(
         cooldown_hours=float(sampling.get("cooldown_hours", 24)),
+        target_bytes=current_policy.target_bytes,
+        minimum_free_bytes=current_policy.minimum_free_bytes,
+        average_sample_bytes=current_policy.average_sample_bytes,
+        sampling_budget=current_policy.budget,
+        camera_id=camera_id,
+        expected_samples_per_person_hour=float(
+            sampling.get("expected_samples_per_person_hour", 1.0)
+        ),
     )
+    updated_policy.copy_activity_from(current_policy)
+    pipeline.sampling_policy = updated_policy
     if "name" in payload:
         pipeline.camera_name = payload["name"]
     if "recent_samples_limit" in payload:
